@@ -178,22 +178,38 @@
   #stage-music {
     background: linear-gradient(180deg, #e8ddff 0%, #d4d4ff 100%);
   }
+  /* 鍵盤は画面中央に大きく。上下は 14% を確保しつつ、高さは 62vmin で頭打ちにして
+     縦長画面（834x1194 など）で鍵が異様に間延びしないようにする。
+     top/bottom 指定 + margin:auto で縦横中央寄せになる。
+     白鍵 1 本の比率は 0.15（縦向き）〜0.27（横向き）で、実物のピアノ（約 0.15）に近い。 */
   #music-keys {
     position: absolute;
-    /* safe-area を避けつつ縦向きでも画面を使い切る。
-       top 14%, bottom 14%, 左右 3vw を引いた領域に鍵盤を配置 */
     left: 3vw;
     right: 3vw;
     top: 14%;
     bottom: 14%;
-    display: grid;
-    grid-template-columns: repeat(7, 1fr);
-    gap: 1.5vmin;
+    max-height: 62vmin;
+    margin: auto;                    /* 上下中央寄せ */
+    display: flex;
+    gap: 2px;                        /* 白鍵の細い境目線 */
+  }
+  /* 赤いフェルト帯（鍵盤上端）。タップは邪魔しない */
+  #music-keys::before {
+    content: "";
+    position: absolute;
+    left: 0; right: 0;
+    top: 0;
+    height: 2vmin;
+    background: linear-gradient(180deg, #a52424 0%, #8b1a1a 55%, #6d1313 100%);
+    box-shadow: 0 2px 5px rgba(0,0,0,.35);
+    border-radius: 6px;
+    z-index: 3;
+    pointer-events: none;
   }
   .music-key {
+    position: relative;
     border: 0;
-    border-radius: 24px;
-    box-shadow: 0 6px 0 rgba(0,0,0,.18);
+    padding: 0;
     pointer-events: auto;
     touch-action: none;
     -webkit-tap-highlight-color: transparent;
@@ -201,13 +217,73 @@
     user-select: none;
     -webkit-touch-callout: none;
     cursor: pointer;
-    transition: transform 80ms ease, filter 80ms ease, box-shadow 80ms ease;
+    transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
   }
-  .music-key.pressed {
-    transform: scale(1.05);
-    filter: brightness(1.25) saturate(1.25);
-    box-shadow: 0 3px 0 rgba(0,0,0,.25);
+  /* 押した鍵のレインボー色（JS が --tint に設定）を乗せる層。
+     opacity 0→.55 で点灯し、class を外すと 180ms で戻る */
+  .music-key::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: var(--tint, #fff);
+    opacity: 0;
+    transition: opacity 180ms ease;
+    pointer-events: none;
   }
+  /* 押下中は遷移時間を 0 にし「即沈み・即点灯」、戻すときだけ 180ms で復活させる */
+  .music-key.pressed { transition-duration: 0ms; }
+  .music-key.pressed::after { transition-duration: 0ms; }
+
+  /* 白鍵: 8 本を隙間なく等幅で並べる */
+  .music-key.white {
+    flex: 1 1 0;
+    min-width: 0;
+    border-radius: 0 0 14px 14px;
+    background: linear-gradient(180deg, #ffffff 0%, #fafafe 68%, #e4e4ee 100%);
+    box-shadow:
+      inset 1px 0 0 rgba(0,0,0,.14),      /* 左の境目線 */
+      inset -1px 0 0 rgba(0,0,0,.14),     /* 右の境目線 */
+      0 6px 0 rgba(0,0,0,.16),           /* 下端の厚み */
+      0 10px 14px rgba(0,0,0,.20);       /* 影 */
+    z-index: 1;
+  }
+  .music-key.white.pressed {
+    transform: translateY(3px);
+    box-shadow:
+      inset 1px 0 0 rgba(0,0,0,.14),
+      inset -1px 0 0 rgba(0,0,0,.14),
+      0 2px 0 rgba(0,0,0,.20),
+      0 4px 8px rgba(0,0,0,.18);
+    filter: saturate(1.15) brightness(1.02);
+  }
+  .music-key.white.pressed::after { opacity: .55; }
+
+  /* 黒鍵: 白鍵の上に重ねる。--pos は境界位置 / 8（JS が設定） */
+  .music-key.black {
+    position: absolute;
+    top: 0;
+    left: calc(var(--pos, 0) * 100% / 8);
+    width: 7.5%;                      /* 白鍵 1 本 (12.5%) の 60% */
+    height: 62%;                      /* 鍵盤全体-height の 62% */
+    border-radius: 0 0 8px 8px;
+    background: linear-gradient(180deg, #4c4c55 0%, #26262c 46%, #131316 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,.35),   /* 上の光沢 */
+      0 4px 0 rgba(0,0,0,.55),
+      0 7px 10px rgba(0,0,0,.45);
+    transform: translateX(-50%);
+    z-index: 2;
+  }
+  .music-key.black.pressed {
+    transform: translate(-50%, 3px);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,.25),
+      0 1px 0 rgba(0,0,0,.60),
+      0 3px 6px rgba(0,0,0,.40);
+    filter: brightness(1.25);
+  }
+  .music-key.black.pressed::after { opacity: .60; }
 
   /* ===== のりもの ===== */
   #stage-vehicle {
@@ -806,16 +882,24 @@ const SoundKit = (() => {
     playNote(freq, 0.18, 0.16);
   }
 
-  /* --------------- おとあそび：長音階（C4〜B4） --------------- */
-  // ドレミファソラシ。やわらかい音色（triangle + 倍音）
+  /* --------------- おとあそび：半音階 13 音（C4〜C5） --------------- */
+  // 実際の鍵盤の 1 オクターブ分。インデックスは音名順に固定
+  // （0=C4,1=C#4,2=D4,3=D#4,4=E4,5=F4,6=F#4,7=G4,8=G#4,9=A4,10=A#4,11=B4,12=C5）。
+  // DOM の各鍵の data-note がこのインデックスと 1 対 1 で対応する。
   const musicScale = [
-    261.63,  // C4 ド
-    293.66,  // D4 レ
-    329.63,  // E4 ミ
-    349.23,  // F4 ファ
-    392.00,  // G4 ソ
-    440.00,  // A4 ラ
-    493.88,  // B4 シ
+    261.63,  //  0  C4   ド
+    277.18,  //  1  C#4
+    293.66,  //  2  D4   レ
+    311.13,  //  3  D#4
+    329.63,  //  4  E4   ミ
+    349.23,  //  5  F4   ファ
+    369.99,  //  6  F#4
+    392.00,  //  7  G4   ソ
+    415.30,  //  8  G#4
+    440.00,  //  9  A4   ラ
+    466.16,  // 10  A#4
+    493.88,  // 11  B4   シ
+    523.25,  // 12  C5   高いド
   ];
   function playMusicNote(idx, dur = 0.6) {
     if (!ctx) return;
@@ -1355,6 +1439,11 @@ function setupHoldButton(btn, onLongPress, opts) {
   function drawRing() {
     if (!ctx2d) return;
     const w = cv.clientWidth;
+    // ボタンが非表示（display:none 等）で clientWidth が 0 や極端に小さいとき、
+    // lineW（最低 3px）と合わせて arc 半径が負になり IndexSizeError になる。
+    // 線幅 lineW = max(3, w*0.08) なので、半径が負になるのは w < 2*lineW のとき。
+    const lineW0 = Math.max(3, w * 0.08);
+    if (w <= lineW0 * 2) return;
     ctx2d.clearRect(0, 0, cv.width, cv.height);
     if (!locked) return;
     const elapsed = performance.now() - start;
@@ -1362,7 +1451,7 @@ function setupHoldButton(btn, onLongPress, opts) {
     // setupHiDPICanvas で既に scale(dpr,dpr) 済みなので、ここでは再 scale しない
     ctx2d.save();
     // 線幅もボタンサイズに比例（vmin ベース）
-    const lineW = Math.max(3, w * 0.08);
+    const lineW = lineW0;
     ctx2d.lineWidth = lineW;
     ctx2d.strokeStyle = COLOR;
     ctx2d.beginPath();
@@ -1381,6 +1470,9 @@ function setupHoldButton(btn, onLongPress, opts) {
     timer = setInterval(drawRing, 16);
     holdTimer = setTimeout(() => {
       if (locked) {
+        // onLongPress() でホームへ戻るとボタンが display:none になり、ResizeObserver→rebuildCanvas→drawRing が走る。
+        // そのとき drawRing の arc 半径が負にならないよう、先に locked を解除しておく。
+        locked = false;
         clearInterval(timer);
         timer = null;
         document.body.classList.remove("home-locking");
@@ -1919,21 +2011,49 @@ function setupColorTap() {
 
 /* =====================================================================
    モード：おとあそび（鍵盤）
-   - 7 本の鍵、ドレミファソラシ。各鍵別の明るい色。
-   - タップで音が鳴り、鍵が光って軽く拡大。
+   - 白鍵 8 本（C4 D4 E4 F4 G4 A4 B4 C5）＋ 黒鍵 5 本（C#4 D#4 F#4 G#4 A#4）。
+     本物のピアノと同じ配置（黒鍵は ド-レ間、レ-ミ間、ファ-ソ間、ソ-ラ間、ラ-シ間）。
+   - data-note に SoundKit.musicScale のインデックス（音名順 0..12）を持たせる。
+   - タップで音が鳴り、鍵が沈んでレインボー色に光る（180ms で戻る）。
    - マルチタッチOK（pointerId ごとに「いま押されている鍵」を管理）。
    - 掌は無視。ドラッグで鍵をまたいだら新しい鍵の音を鳴らす。
    ===================================================================== */
+// インデックス = musicScale の音名順。白鍵 8 色 + 黒鍵 5 色（各黒鍵は濃い色）
 const MUSIC_KEY_COLORS = [
-  "#ff5a5f",  // ド：赤
-  "#ff8a3d",  // レ：オレンジ
-  "#ffd60a",  // ミ：きいろ
-  "#06d6a0",  // ファ：みどり
-  "#3a86ff",  // ソ：青
-  "#9b5de5",  // ラ：むらさき
-  "#ff80aa",  // シ：ピンク
+  "#ff5a5f",  //  0  C4  ド      赤
+  "#b0121b",  //  1  C#4        濃い赤
+  "#ff8a3d",  //  2  D4  レ      オレンジ
+  "#b3520c",  //  3  D#4        濃いオレンジ
+  "#ffd60a",  //  4  E4  ミ      きいろ
+  "#06d6a0",  //  5  F4  ファ    みどり
+  "#047a5c",  //  6  F#4        濃いみどり
+  "#3a86ff",  //  7  G4  ソ      青
+  "#1b4fb8",  //  8  G#4        濃い青
+  "#9b5de5",  //  9  A4  ラ      むらさき
+  "#5f2fa8",  // 10  A#4        濃いむらさき
+  "#ff80aa",  // 11  B4  シ      ピンク
+  "#00b4d8",  // 12  C5  高いド  みずいろ
 ];
-const musicKeys = [];           // {el, idx}
+// 白鍵 8 本（音符インデックスと accessibility 用の名前）
+const MUSIC_WHITE_NOTES = [
+  { note: 0,  name: "ド"     },
+  { note: 2,  name: "レ"     },
+  { note: 4,  name: "ミ"     },
+  { note: 5,  name: "ファ"   },
+  { note: 7,  name: "ソ"     },
+  { note: 9,  name: "ラ"     },
+  { note: 11, name: "シ"     },
+  { note: 12, name: "高いド" },
+];
+// 黒鍵 5 本。pos は境界位置（白鍵 1 本 = 1.0）
+const MUSIC_BLACK_NOTES = [
+  { note: 1,  pos: 1 },   // ド-レ間  C#4
+  { note: 3,  pos: 2 },   // レ-ミ間  D#4
+  { note: 6,  pos: 4 },   // ファ-ソ間 F#4
+  { note: 8,  pos: 5 },   // ソ-ラ間  G#4
+  { note: 10, pos: 6 },   // ラ-シ間  A#4
+];
+const musicKeys = [];           // {el, note, black}
 let musicKeysBuilt = false;
 
 function buildMusicKeys() {
@@ -1942,13 +2062,26 @@ function buildMusicKeys() {
   if (!host) return;
   host.innerHTML = "";
   musicKeys.length = 0;
-  for (let i = 0; i < 7; i++) {
-    const btn = document.createElement("button");
-    btn.className = "music-key";
-    btn.dataset.idx = String(i);
-    btn.style.background = MUSIC_KEY_COLORS[i];
-    host.appendChild(btn);
-    musicKeys.push({ el: btn, idx: i });
+  // 白鍵（flex で等幅に並ぶ）
+  for (const w of MUSIC_WHITE_NOTES) {
+    const el = document.createElement("div");
+    el.className = "music-key white";
+    el.dataset.note = String(w.note);
+    el.setAttribute("aria-label", w.name);
+    el.style.setProperty("--tint", MUSIC_KEY_COLORS[w.note]);
+    host.appendChild(el);
+    musicKeys.push({ el, note: w.note, black: false });
+  }
+  // 黒鍵（白鍵の上に絶対配置で重ねる）
+  for (const b of MUSIC_BLACK_NOTES) {
+    const el = document.createElement("div");
+    el.className = "music-key black";
+    el.dataset.note = String(b.note);
+    // CSS の left: calc(var(--pos) * 100% / 8) で境界位置に置かれる
+    el.style.setProperty("--pos", String(b.pos));
+    el.style.setProperty("--tint", MUSIC_KEY_COLORS[b.note]);
+    host.appendChild(el);
+    musicKeys.push({ el, note: b.note, black: true });
   }
   musicKeysBuilt = true;
 }
@@ -1958,15 +2091,21 @@ function initMusic() {
   particles.length = 0;
 }
 
-// 絶対座標 (x, y) → 0..6 の鍵インデックス。host の外なら -1。
-function keyIndexFromPointer(x, y) {
-  const host = document.getElementById("music-keys");
-  if (!host) return -1;
-  const r = host.getBoundingClientRect();
-  if (x < r.left || x > r.right || y < r.top || y > r.bottom) return -1;
-  // 7 等分。gap は均等割り込みなので近似で十分（指の太さ ≒ 1 鍵分なので余裕）
-  const rel = (x - r.left) / Math.max(1, r.width);
-  return Math.min(6, Math.max(0, Math.floor(rel * 7)));
+// 絶対座標 (x, y) → 押された鍵 {el, note, black}。どの鍵にも当たらなければ null。
+// 黒鍵は白鍵の上に重なっているため、必ず黒鍵から判定する（黒鍵優先）。
+function keyFromPoint(x, y) {
+  // 黒鍵を優先（重なっている領域は黒鍵の音を鳴らす）
+  for (const k of musicKeys) {
+    if (!k.black) continue;
+    const r = k.el.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return k;
+  }
+  for (const k of musicKeys) {
+    if (k.black) continue;
+    const r = k.el.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return k;
+  }
+  return null;
 }
 
 function setupMusicTap() {
@@ -1977,22 +2116,15 @@ function setupMusicTap() {
   // pointerId ごとに「いまどの鍵を押しているか」を覚えて、ドラッグで鍵またぎを検知
   const active = new Map();
 
-  function flashKey(idx) {
-    const k = musicKeys[idx];
-    if (!k) return;
+  function playForKey(k) {
+    SoundKit.playMusicNote(k.note, 0.6);
     k.el.classList.add("pressed");
     // 短いアニメ（押しっぱなしでも 180ms で解除＝連打で固まらない）
     setTimeout(() => k.el.classList.remove("pressed"), 180);
-  }
-
-  function playForIdx(idx, x, y) {
-    if (idx < 0 || idx > 6) return;
-    SoundKit.playMusicNote(idx, 0.6);
-    flashKey(idx);
-    // 鍵の中心付近にきらきら粒子
-    const r = musicKeys[idx].el.getBoundingClientRect();
-    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-    spawnParticles(cx, cy, MUSIC_KEY_COLORS[idx], 18);
+    // 鍵の位置（縦 60% のあたり）きらきら粒子
+    const r = k.el.getBoundingClientRect();
+    spawnParticles(r.left + r.width / 2, r.top + r.height * 0.6,
+                   MUSIC_KEY_COLORS[k.note], 18);
   }
 
   function onDown(e) {
@@ -2000,20 +2132,18 @@ function setupMusicTap() {
     if (isPalmTouch(e)) return;
     SoundKit.unlock();
     tryFullscreen();
-    const x = e.clientX, y = e.clientY;
-    const idx = keyIndexFromPointer(x, y);
-    active.set(e.pointerId, idx);
-    if (idx >= 0) playForIdx(idx, x, y);
+    const k = keyFromPoint(e.clientX, e.clientY);
+    active.set(e.pointerId, k);
+    if (k) playForKey(k);
   }
   function onMove(e) {
     if (!active.has(e.pointerId)) return;
     e.preventDefault();
-    const x = e.clientX, y = e.clientY;
-    const idx = keyIndexFromPointer(x, y);
+    const k = keyFromPoint(e.clientX, e.clientY);
     const prev = active.get(e.pointerId);
-    if (idx !== prev) {
-      active.set(e.pointerId, idx);
-      if (idx >= 0) playForIdx(idx, x, y);
+    if (k !== prev) {
+      active.set(e.pointerId, k);
+      if (k) playForKey(k);
     }
   }
   function onUp(e) {
@@ -2103,7 +2233,8 @@ function layoutVehicles() {
       v.el.style.fontSize = cellSize + "px";
       if (v.runState === "idle") {
         v.x = v.slotX;
-        v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(1)`;
+        // 向きを保持して pop を防ぐ（buildVehicles で dir=1 に初期化済み）
+        v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(${v.dir})`;
       }
       // running/returning 中の v.x は tick が補間中で触らない（戻り先の slotX だけ更新）
     }
@@ -2121,7 +2252,8 @@ function layoutVehicles() {
       v.el.style.fontSize = cellSize + "px";
       if (v.runState === "idle") {
         v.x = v.slotX;
-        v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(1)`;
+        // 向きを保持して pop を防ぐ（buildVehicles で dir=1 に初期化済み）
+        v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(${v.dir})`;
       }
       // running/returning 中の v.x は tick が補間中で触らない（戻り先の slotX だけ更新）
     }
@@ -2180,7 +2312,9 @@ function tickVehicleRuns(now) {
       v.x = v.fromX + (v.toX - v.fromX) * e;
       v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(${v.dir})`;
       if (u >= 1) {
-        // 反対側から「待機位置」へ戻るアニメーション
+        // 反対側から「待機位置」へ戻るアニメーション。
+        // この瞬間は画面外（dir>0 なら右端+W*0.2、dir<0 なら -W*0.2）にいるので、
+        // ここで別の絵文字へ入れ替えれば見た目には切り替わらない。
         v.runState = "returning";
         v.t0 = now;
         v.dur = 1.6 + Math.random() * 0.6;
@@ -2191,6 +2325,9 @@ function tickVehicleRuns(now) {
           v.fromX = W + W * 0.2;
           v.toX   = v.slotX;
         }
+        // 画面外で見えないうちに絵文字だけ入れ替える（idle 時の pop を防ぐ）
+        v.kind = pickRandomVehicleKind();
+        v.el.textContent = SoundKit.vehicles[v.kind].emo;
       }
     } else if (v.runState === "returning") {
       const t = (now - v.t0) / 1000;
@@ -2199,11 +2336,9 @@ function tickVehicleRuns(now) {
       v.x = v.fromX + (v.toX - v.fromX) * e;
       v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(${v.dir})`;
       if (u >= 1) {
+        // 絵文字の入れ替えは上記の running→returning 境界で行ったので、ここでは触らない。
+        // scaleX も v.dir のままにして、idle 確定時に向きが反転する pop を防ぐ。
         v.runState = "idle";
-        // 戻ってきたら別の種類へ入れ替えて飽きにくくする
-        v.kind = pickRandomVehicleKind();
-        v.el.textContent = SoundKit.vehicles[v.kind].emo;
-        v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(1)`;
       }
     }
   }
