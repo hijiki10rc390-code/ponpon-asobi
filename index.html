@@ -320,9 +320,10 @@
 
   /* ===== のりもの ===== */
   #stage-vehicle {
-    /* 上 65% が空（薄い水色）、下 35% が地面（緑）のグラデ。
-       真ん中付近に薄い雲っぽい白を 1 本入れる */
-    background: linear-gradient(180deg, #a8def9 0%, #c5e8f7 60%, #7cb342 60%, #558b2f 100%);
+    /* 地平線（空↔地面の境界）は上から 32%。layoutVehicles が乗り物を置く
+       領域（top = H*0.38 〜 bottom = H*0.97）は全て地面側の範囲になり、
+       絵文字のすぐ下にある .vehicle::after の影が地面に接地して見える。 */
+    background: linear-gradient(180deg, #a8def9 0%, #c5e8f7 32%, #7cb342 32%, #558b2f 100%);
   }
   #vehicle-area {
     position: absolute;
@@ -345,6 +346,24 @@
     cursor: pointer;
     will-change: transform;
     transform-origin: center center;
+  }
+  /* 足元の影：薄い楕円（半透明の黒・絵文字の幅 70%・高さ 0.18em）で地面に接地して見える。
+     親 .vehicle は JS から transform（走行中の translate + scaleX 反転）を毎フレーム更新されるが、
+     ::after は同じ親の中、絵文字の直下（top:100%）に張り付いているので、走行中も影が一緒に移動する。
+     scaleX 反転は楕円なので見た目は変わらない（左右対称の楕円のまま）。
+     pointer-events:none で影のうえでクリック判定が暴れないようにする。 */
+  .vehicle::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 85%;            /* 車輪の接地位置（絵文字の箱の約 93%）に影の中心が重なるようにする */
+    width: 0.78em;
+    height: 0.17em;
+    background: rgba(0, 0, 0, 0.22);
+    border-radius: 50%;
+    transform: translateX(-50%);
+    pointer-events: none;
+    z-index: -1;
   }
   /* 雲：のりもの画面の空に浮かべる背景装飾（タップ反応なし） */
   .cloud {
@@ -508,7 +527,7 @@
 /* =====================================================================
    baby-tap : 1歳8か月向けタップ知育ゲーム
    - 外部ライブラリ/画像/通信なし、絵は絵文字+Canvas
-   - WebAudioで効果音合成、speechSynthesisで日本語読み上げ
+   - WebAudioで効果音合成のみ（読み上げは廃止：人工音声が棒読みになるため）
    - ピンチ/ダブルタップ/コンテキストメニュー/スクロール抑止
    ===================================================================== */
 
@@ -526,7 +545,7 @@ window.addEventListener("touchmove", e => {
 }, {passive:false});
 
 /* =====================================================================
-   音声レイヤ (WebAudio + speechSynthesis)
+   音声レイヤ (WebAudio のみ。読み上げ(speechSynthesis)は廃止)
    ===================================================================== */
 const SoundKit = (() => {
   let ctx = null;
@@ -585,10 +604,8 @@ const SoundKit = (() => {
         // start が失敗してもフラグは立たない → 次の pointerup / touchend / click で再試行される
       } catch (err) { /* ignore */ }
     }
-    // TTS プライミング（iOS は最初の speak がユーザー操作の同期処理内でないと無音）
-    // primeTTS 自身が ttsPrimed で 1 度きりガードするので、二重読みにはならない
-    // 未定義でも try/catch で握り潰す（定義は SoundKit の外）
-    try { primeTTS(); } catch (_) { /* not defined */ }
+    // 読み上げ廃止：以前はここで primeTTS() を呼んでいた（iOS の無音対策）。
+    // 人工音声が棒読みになるため speechSynthesis は今後一切使わない。
   }
   // 同時発音の管理。true で発音可、false でスキップ。
   function acquireVoice(durMs) {
@@ -610,208 +627,405 @@ const SoundKit = (() => {
     o.stop(t0 + dur + release + 0.02);
   }
 
+  /* --------------- 鳴き声ユーティリティ --------------- */
+  // ±pct% のランダムジッタ。鳴き声に毎回少し違う揺れを与える。
+  // フォルマントを並列に重ねたあとの音量補正（聞こえ方は実測で調整）
+  const FORMANT_MAKEUP = 6;
+  const jit = (base, pct = 0.07) => base * (1 + (Math.random() * 2 - 1) * pct);
+  // 短いノイズバースト（子音・息）。gain で包んで start/stop。rise は 5ms で短く。
+  function noiseBurst(t0, dur, peak, freq) {
+    const durSec = Math.max(0.01, dur);
+    const buf = ctx.createBuffer(1, Math.max(1, Math.floor(ctx.sampleRate * durSec)), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      // 末尾で減衰するホワイトノイズ（破裂っぽさ）
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 2);
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = freq || 2200;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(peak, t0 + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + durSec);
+    src.connect(lp).connect(g).connect(master);
+    src.start(t0);
+    src.stop(t0 + durSec + 0.02);
+  }
+
   /* --------------- 鳴き声 --------------- */
-  // いぬ：わんわん = 矩形波の短いパルス 2 発を低め
+  // いぬ：ワンッ ワンッ 2 発: sawtooth 急降下（520→300Hz）+ ア母音のフォルマント
   function bark() {
     if (!ctx) return;
     const now = ctx.currentTime;
-    [0, 0.18].forEach(off => {
+    [0, 0.18].forEach((off, idx) => {
+      const t0 = now + off;
+      const dur = jit(0.14, 0.06);
+      const f0 = jit(520, 0.06);
+      const f1 = jit(300, 0.06);
+      // 声帯（sawtooth, 急降下）
       const o = ctx.createOscillator();
+      o.type = "sawtooth";
+      o.frequency.setValueAtTime(f0, t0);
+      o.frequency.exponentialRampToValueAtTime(Math.max(80, f1), t0 + dur * 0.7);
+      // ア母音のフォルマント（F1=800, F2=1200 を bandpass で共鳴させる）
+      const fA1 = ctx.createBiquadFilter();
+      fA1.type = "bandpass"; fA1.frequency.value = 800;  fA1.Q.value = 3.5;
+      const fA2 = ctx.createBiquadFilter();
+      fA2.type = "bandpass"; fA2.frequency.value = 1200; fA2.Q.value = 3.5;
       const g = ctx.createGain();
-      o.type = "square";
-      o.frequency.setValueAtTime(380, now + off);
-      o.frequency.exponentialRampToValueAtTime(260, now + off + 0.12);
-      g.gain.setValueAtTime(0.0001, now + off);
-      g.gain.exponentialRampToValueAtTime(0.22, now + off + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, now + off + 0.12);
-      o.connect(g).connect(master);
-      o.start(now + off);
-      o.stop(now + off + 0.16);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.20, t0 + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      // 母音の共鳴（フォルマント）は並列に重ねる（直列だと通る音がほぼ無くなる）
+      const mix1 = ctx.createGain(); mix1.gain.value = FORMANT_MAKEUP;
+      o.connect(fA1).connect(mix1); o.connect(fA2).connect(mix1);
+      mix1.connect(g);
+      g.connect(master);
+      o.start(t0); o.stop(t0 + dur + 0.02);
+      // 立ち上がりにノイズ（ワンの子音・息）: 1 発目だけ
+      if (idx === 0) noiseBurst(t0, 0.04, 0.10);
     });
   }
-  // ねこ：にゃーにゃー = サイン波のポルタメント+ビブラート
+  // ねこ：ニャーオ 0.9s, sawtooth ポルタメント（480→900→550Hz）+ イ→ア のフォルマント変化 + 軽いビブラート
   function meow() {
     if (!ctx) return;
     const now = ctx.currentTime;
+    const t0 = now;
+    const dur = jit(0.9, 0.06);
+    // 声帯（sawtooth）：にゃーの 3 段階ピッチ
     const o = ctx.createOscillator();
+    o.type = "sawtooth";
+    o.frequency.setValueAtTime(jit(480, 0.05), t0);
+    o.frequency.exponentialRampToValueAtTime(jit(900, 0.05), t0 + dur * 0.20);
+    o.frequency.exponentialRampToValueAtTime(jit(550, 0.05), t0 + dur * 0.62);
+    // 軽いビブラート (5Hz, 深さ 2%)
+    const lfoF = ctx.createOscillator();
+    const lfoFg = ctx.createGain();
+    lfoF.frequency.value = 5;
+    lfoFg.gain.value = 18;
+    lfoF.connect(lfoFg).connect(o.frequency);
+    // フォルマント「イ」(F1=300 F2=2200) → 「ア」(F1=800 F2=1200) へ口の形が変わる
+    const f1 = ctx.createBiquadFilter();
+    f1.type = "bandpass"; f1.Q.value = 3.5;
+    f1.frequency.setValueAtTime(300, t0);
+    f1.frequency.exponentialRampToValueAtTime(800, t0 + dur * 0.55);
+    const f2 = ctx.createBiquadFilter();
+    f2.type = "bandpass"; f2.Q.value = 3.5;
+    f2.frequency.setValueAtTime(2200, t0);
+    f2.frequency.exponentialRampToValueAtTime(1200, t0 + dur * 0.55);
     const g = ctx.createGain();
-    o.type = "sine";
-    o.frequency.setValueAtTime(620, now);
-    o.frequency.exponentialRampToValueAtTime(900, now + 0.18);
-    o.frequency.exponentialRampToValueAtTime(720, now + 0.55);
-    const lfo = ctx.createOscillator();
-    const lfoG = ctx.createGain();
-    lfo.frequency.value = 9;
-    lfoG.gain.value = 40;
-    lfo.connect(lfoG).connect(o.frequency);
-    g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.22, now + 0.05);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
-    o.connect(g).connect(master);
-    o.start(now); o.stop(now + 0.6);
-    lfo.start(now); lfo.stop(now + 0.6);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.18, t0 + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    // 母音の共鳴（フォルマント）は並列に重ねる（直列だと通る音がほぼ無くなる）
+    const mix2 = ctx.createGain(); mix2.gain.value = FORMANT_MAKEUP;
+    o.connect(f1).connect(mix2); o.connect(f2).connect(mix2);
+    mix2.connect(g);
+    g.connect(master);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+    lfoF.start(t0); lfoF.stop(t0 + dur + 0.02);
   }
-  // うし：もーもー = 低いサイン波+ビブラート
+  // うし：モォ〜 1.1s, sawtooth（150→115Hz）+ オ→ウ のフォルマント + ゆっくりビブラート + 鼻にかかった感じ
   function moo() {
     if (!ctx) return;
     const now = ctx.currentTime;
+    const t0 = now;
+    const dur = jit(1.1, 0.05);
     const o = ctx.createOscillator();
-    const g = ctx.createGain();
     o.type = "sawtooth";
-    o.frequency.value = 150;
-    const lfo = ctx.createOscillator();
-    const lfoG = ctx.createGain();
-    lfo.frequency.value = 4.5;
-    lfoG.gain.value = 6;
-    lfo.connect(lfoG).connect(o.frequency);
-    g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.22, now + 0.15);
-    g.gain.setValueAtTime(0.22, now + 0.7);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + 1.0);
+    const baseF = jit(120, 0.05);
+    o.frequency.setValueAtTime(jit(150, 0.04), t0);
+    o.frequency.linearRampToValueAtTime(baseF, t0 + dur * 0.5);
+    // ゆっくりビブラート (4.5Hz, 深さ 3%)
+    const lfoF = ctx.createOscillator();
+    const lfoFg = ctx.createGain();
+    lfoF.frequency.value = 4.5;
+    lfoFg.gain.value = baseF * 0.03;
+    lfoF.connect(lfoFg).connect(o.frequency);
+    // フォルマント「オ」(F1=500 F2=900) → 「ウ」(F1=350 F2=1000)
+    const f1 = ctx.createBiquadFilter();
+    f1.type = "bandpass"; f1.Q.value = 4;
+    f1.frequency.setValueAtTime(500, t0);
+    f1.frequency.linearRampToValueAtTime(350, t0 + dur);
+    const f2 = ctx.createBiquadFilter();
+    f2.type = "bandpass"; f2.Q.value = 4;
+    f2.frequency.setValueAtTime(900, t0);
+    f2.frequency.linearRampToValueAtTime(1000, t0 + dur);
+    // 鼻にかかった感じを lowpass で表現
     const lp = ctx.createBiquadFilter();
-    lp.type = "lowpass"; lp.frequency.value = 700;
-    o.connect(lp).connect(g).connect(master);
-    o.start(now); o.stop(now + 1.05);
-    lfo.start(now); lfo.stop(now + 1.05);
+    lp.type = "lowpass"; lp.frequency.value = 1000;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.20, t0 + 0.15);
+    g.gain.setValueAtTime(0.20, t0 + dur * 0.7);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    // 母音の共鳴（フォルマント）は並列に重ねる（直列だと通る音がほぼ無くなる）
+    const mix3 = ctx.createGain(); mix3.gain.value = FORMANT_MAKEUP;
+    o.connect(f1).connect(mix3); o.connect(f2).connect(mix3);
+    mix3.connect(lp).connect(g);
+    g.connect(master);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+    lfoF.start(t0); lfoF.stop(t0 + dur + 0.02);
   }
-  // ぶた：ぶーぶー = のこぎり波にローパス
+  // ぶた：ブヒッ ブヒッ ブヒッ = 3 パルス、ノイズ成分多め、ピッチ 140→200Hz の小さな上昇
   function oink() {
     if (!ctx) return;
     const now = ctx.currentTime;
-    [0, 0.25].forEach(off => {
+    const seq = [0, 0.16, 0.32];
+    seq.forEach((off, idx) => {
+      const t0 = now + off;
+      const dur = 0.12;
       const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      const lp = ctx.createBiquadFilter();
       o.type = "sawtooth";
-      o.frequency.setValueAtTime(180, now + off);
-      o.frequency.exponentialRampToValueAtTime(120, now + off + 0.3);
-      lp.type = "lowpass"; lp.frequency.value = 600;
-      g.gain.setValueAtTime(0.0001, now + off);
-      g.gain.exponentialRampToValueAtTime(0.20, now + off + 0.03);
-      g.gain.exponentialRampToValueAtTime(0.0001, now + off + 0.32);
-      o.connect(lp).connect(g).connect(master);
-      o.start(now + off); o.stop(now + off + 0.36);
+      o.frequency.setValueAtTime(jit(140, 0.06), t0);
+      o.frequency.exponentialRampToValueAtTime(jit(200, 0.06), t0 + dur);
+      // フォルマント（低めの真ん中 + やや高い穴）を通す
+      const f1 = ctx.createBiquadFilter();
+      f1.type = "bandpass"; f1.frequency.value = 700;  f1.Q.value = 4;
+      const f2 = ctx.createBiquadFilter();
+      f2.type = "bandpass"; f2.frequency.value = 1500; f2.Q.value = 4;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.18, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      // 母音の共鳴（フォルマント）は並列に重ねる（直列だと通る音がほぼ無くなる）
+      const mix4 = ctx.createGain(); mix4.gain.value = FORMANT_MAKEUP;
+      o.connect(f1).connect(mix4); o.connect(f2).connect(mix4);
+      mix4.connect(g);
+      g.connect(master);
+      o.start(t0); o.stop(t0 + dur + 0.02);
+      // ノイズ成分多め（ブヒの子音）：奇数パルスで重ねる
+      if (idx % 2 === 0) noiseBurst(t0, 0.06, 0.12, 1800);
     });
   }
-  // にわとり：こけこっこー = 高めの矩形波 2 音
+  // にわとり：コ・ケ・コ（短い 3 連スタッカート）＋長く上がって下がる「コー」+ ビブラート + かすれノイズ
   function cluck() {
     if (!ctx) return;
     const now = ctx.currentTime;
+    // 4 セグメント（コ・ケ・コ・コー）。各セグメントの f0/f1 で音程の動き、F1/F2 でフォルマントを作る。
+    // 4 番目だけビブラートとノイズを足す（声がかすれる感じ）。
     const seq = [
-      {t:0.00, f:880,  d:0.10},
-      {t:0.16, f:1100, d:0.18},
-      {t:0.40, f:880,  d:0.12},
+      { off: 0.00, dur: 0.10, f0: 880,  f1: 700,  F1: 900,  F2: 1400, vibHz: 0,  vibDepth: 0, noise: 0    },
+      { off: 0.14, dur: 0.07, f0: 1100, f1: 950,  F1: 1100, F2: 1700, vibHz: 0,  vibDepth: 0, noise: 0    },
+      { off: 0.24, dur: 0.10, f0: 880,  f1: 720,  F1: 900,  F2: 1400, vibHz: 0,  vibDepth: 0, noise: 0    },
+      { off: 0.42, dur: 0.50, f0: 500,  f1: 950,  F1: 500,  F2: 1600, vibHz: 6,  vibDepth: 0.03, noise: 0.06 },
     ];
-    seq.forEach(s => {
+    seq.forEach((s, i) => {
+      const t0 = now + s.off;
       const o = ctx.createOscillator();
+      o.type = "sawtooth";
+      const baseF = jit(s.f1, 0.05);
+      o.frequency.setValueAtTime(jit(s.f0, 0.05), t0);
+      o.frequency.exponentialRampToValueAtTime(baseF, t0 + s.dur * 0.55);
+      // ビブラート（4 番目だけ）
+      let lfoF = null, lfoFg = null;
+      if (s.vibHz > 0) {
+        lfoF = ctx.createOscillator();
+        lfoFg = ctx.createGain();
+        lfoF.frequency.value = s.vibHz;
+        lfoFg.gain.value = baseF * s.vibDepth;
+        lfoF.connect(lfoFg).connect(o.frequency);
+      }
+      // フォルマント（F1, F2）
+      const f1 = ctx.createBiquadFilter();
+      f1.type = "bandpass"; f1.frequency.value = s.F1; f1.Q.value = 3.5;
+      const f2 = ctx.createBiquadFilter();
+      f2.type = "bandpass"; f2.frequency.value = s.F2; f2.Q.value = 3.5;
       const g = ctx.createGain();
-      o.type = "square";
-      o.frequency.value = s.f;
-      g.gain.setValueAtTime(0.0001, now + s.t);
-      g.gain.exponentialRampToValueAtTime(0.10, now + s.t + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, now + s.t + s.d);
-      o.connect(g).connect(master);
-      o.start(now + s.t); o.stop(now + s.t + s.d + 0.02);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.16, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + s.dur);
+      // 母音の共鳴（フォルマント）は並列に重ねる（直列だと通る音がほぼ無くなる）
+      const mix5 = ctx.createGain(); mix5.gain.value = FORMANT_MAKEUP;
+      o.connect(f1).connect(mix5); o.connect(f2).connect(mix5);
+      mix5.connect(g);
+      g.connect(master);
+      o.start(t0); o.stop(t0 + s.dur + 0.02);
+      if (lfoF) { lfoF.start(t0); lfoF.stop(t0 + s.dur + 0.02); }
+      // かすれノイズ（4 番目のコーの頭に 1 回）
+      if (s.noise > 0) noiseBurst(t0, 0.08, s.noise, 1400);
     });
   }
-  // ひつじ：めーめー = 振幅変調サイン
+  // ひつじ：メェ〜 0.9s, pitch≈420Hz, 速いビブラート（LFO 24Hz, 深さ 6%）で震える声, エ母音 + 鼻声
   function baa() {
     if (!ctx) return;
     const now = ctx.currentTime;
+    const t0 = now;
+    const dur = jit(0.9, 0.05);
     const o = ctx.createOscillator();
+    o.type = "sawtooth";
+    const baseF = jit(420, 0.04);
+    o.frequency.setValueAtTime(baseF, t0);
+    o.frequency.linearRampToValueAtTime(jit(380, 0.04), t0 + dur * 0.5);
+    // 速いビブラート 24Hz, 深さ 6%（震える声の表現）
+    const lfoF = ctx.createOscillator();
+    const lfoFg = ctx.createGain();
+    lfoF.frequency.value = 24;
+    lfoFg.gain.value = baseF * 0.06;
+    lfoF.connect(lfoFg).connect(o.frequency);
+    // フォルマント「エ」(F1=550 F2=1800) + 鼻声（lowpass）
+    const f1 = ctx.createBiquadFilter();
+    f1.type = "bandpass"; f1.frequency.value = 550;  f1.Q.value = 5;
+    const f2 = ctx.createBiquadFilter();
+    f2.type = "bandpass"; f2.frequency.value = 1800; f2.Q.value = 5;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 1700;
     const g = ctx.createGain();
-    o.type = "sine";
-    o.frequency.setValueAtTime(420, now);
-    o.frequency.linearRampToValueAtTime(380, now + 0.4);
-    const lfo = ctx.createOscillator();
-    const lfoG = ctx.createGain();
-    lfo.type = "sine"; lfo.frequency.value = 11;
-    lfoG.gain.value = 0.12;
-    lfo.connect(lfoG).connect(g.gain);
-    g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.22, now + 0.04);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
-    o.connect(g).connect(master);
-    o.start(now); o.stop(now + 0.5);
-    lfo.start(now); lfo.stop(now + 0.5);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.20, t0 + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    // 母音の共鳴（フォルマント）は並列に重ねる（直列だと通る音がほぼ無くなる）
+    const mix6 = ctx.createGain(); mix6.gain.value = FORMANT_MAKEUP;
+    o.connect(f1).connect(mix6); o.connect(f2).connect(mix6);
+    mix6.connect(lp).connect(g);
+    g.connect(master);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+    lfoF.start(t0); lfoF.stop(t0 + dur + 0.02);
   }
-  // うま：ひひーん = サイン波のポルタメント
+  // うま：ヒヒーン 1.1s, 650→1250→700Hz ポルタメント + ビブラート + わずかなノイズ
   function neigh() {
     if (!ctx) return;
     const now = ctx.currentTime;
+    const t0 = now;
+    const dur = jit(1.1, 0.05);
     const o = ctx.createOscillator();
+    o.type = "sawtooth";
+    o.frequency.setValueAtTime(jit(650, 0.05), t0);
+    o.frequency.exponentialRampToValueAtTime(jit(1250, 0.05), t0 + dur * 0.30);
+    o.frequency.linearRampToValueAtTime(jit(700, 0.05), t0 + dur * 0.85);
+    // ビブラート 5Hz, 深さ 22Hz
+    const lfoF = ctx.createOscillator();
+    const lfoFg = ctx.createGain();
+    lfoF.frequency.value = 5;
+    lfoFg.gain.value = 22;
+    lfoF.connect(lfoFg).connect(o.frequency);
+    // フォルマント「ヒ」(F1=400 F2=2200) → 「イーン」(F2 を下げる)
+    const f1 = ctx.createBiquadFilter();
+    f1.type = "bandpass"; f1.Q.value = 5;
+    f1.frequency.setValueAtTime(400, t0);
+    f1.frequency.linearRampToValueAtTime(550, t0 + dur);
+    const f2 = ctx.createBiquadFilter();
+    f2.type = "bandpass"; f2.Q.value = 5;
+    f2.frequency.setValueAtTime(2200, t0);
+    f2.frequency.linearRampToValueAtTime(1400, t0 + dur * 0.5);
     const g = ctx.createGain();
-    o.type = "sine";
-    o.frequency.setValueAtTime(380, now);
-    o.frequency.exponentialRampToValueAtTime(820, now + 0.22);
-    o.frequency.exponentialRampToValueAtTime(620, now + 0.45);
-    o.frequency.exponentialRampToValueAtTime(760, now + 0.65);
-    g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.22, now + 0.05);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.7);
-    o.connect(g).connect(master);
-    o.start(now); o.stop(now + 0.75);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.18, t0 + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    // 母音の共鳴（フォルマント）は並列に重ねる（直列だと通る音がほぼ無くなる）
+    const mix7 = ctx.createGain(); mix7.gain.value = FORMANT_MAKEUP;
+    o.connect(f1).connect(mix7); o.connect(f2).connect(mix7);
+    mix7.connect(g);
+    g.connect(master);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+    lfoF.start(t0); lfoF.stop(t0 + dur + 0.02);
+    // 立ち上がりの息成分
+    noiseBurst(t0, 0.05, 0.06, 2000);
   }
-  // かえる：げろげろ = サイン波のポルタメント（下→上→下）
+  // かえる：ゲロゲロ = 2 グループ（off=0, 0.30）, 低い 180Hz パルスを振幅 LFO (14Hz) で刻む, bandpass 900Hz こもった音
   function croak() {
     if (!ctx) return;
     const now = ctx.currentTime;
-    [0, 0.20, 0.50, 0.70].forEach((off, i) => {
+    [0, 0.30].forEach(off => {
+      const t0 = now + off;
+      const dur = 0.18;
+      // 声帯（sawtooth, 180Hz → 140Hz）
       const o = ctx.createOscillator();
+      o.type = "sawtooth";
+      const f0 = jit(180, 0.06);
+      o.frequency.setValueAtTime(f0, t0);
+      o.frequency.exponentialRampToValueAtTime(jit(140, 0.06), t0 + dur);
+      // bandpass 900Hz のこもった音
+      const bp = ctx.createBiquadFilter();
+      bp.type = "bandpass"; bp.frequency.value = 900; bp.Q.value = 4;
+      // 振幅 LFO 14Hz（ゲロゲロの刻み）
+      const lfoA = ctx.createOscillator();
+      const lfoAg = ctx.createGain();
+      lfoA.frequency.value = 14;
+      lfoAg.gain.value = 0.10;
       const g = ctx.createGain();
-      o.type = "sine";
-      o.frequency.setValueAtTime(140, now + off);
-      o.frequency.exponentialRampToValueAtTime(260, now + off + 0.06);
-      o.frequency.exponentialRampToValueAtTime(180, now + off + 0.14);
-      g.gain.setValueAtTime(0.0001, now + off);
-      g.gain.exponentialRampToValueAtTime(0.18, now + off + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, now + off + 0.14);
-      o.connect(g).connect(master);
-      o.start(now + off); o.stop(now + off + 0.18);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.18, t0 + 0.02);
+      lfoA.connect(lfoAg).connect(g.gain);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      o.connect(bp).connect(g).connect(master);
+      o.start(t0); o.stop(t0 + dur + 0.02);
+      lfoA.start(t0); lfoA.stop(t0 + dur + 0.02);
     });
   }
-  // あひる：がーがー = 矩形波 2 音（高め、下降）
+  // あひる：ガーガー 2 発, sawtooth 330→280Hz, 鼻にかかった「ア」フォルマント（F1=800 F2=1200）+ lowpass, ビブラートなし
   function quack() {
     if (!ctx) return;
     const now = ctx.currentTime;
-    [0, 0.16].forEach(off => {
+    [0, 0.30].forEach(off => {
+      const t0 = now + off;
+      const dur = jit(0.25, 0.06);
       const o = ctx.createOscillator();
-      const g = ctx.createGain();
+      o.type = "sawtooth";
+      o.frequency.setValueAtTime(jit(330, 0.05), t0);
+      o.frequency.exponentialRampToValueAtTime(jit(280, 0.05), t0 + dur * 0.7);
+      // 鼻にかかった「ア」フォルマント
+      const fA1 = ctx.createBiquadFilter();
+      fA1.type = "bandpass"; fA1.frequency.value = 800;  fA1.Q.value = 5;
+      const fA2 = ctx.createBiquadFilter();
+      fA2.type = "bandpass"; fA2.frequency.value = 1200; fA2.Q.value = 5;
+      // lowpass でさらに鼻にかかった感じを出す
       const lp = ctx.createBiquadFilter();
-      o.type = "square";
-      o.frequency.setValueAtTime(520, now + off);
-      o.frequency.exponentialRampToValueAtTime(280, now + off + 0.10);
-      lp.type = "lowpass"; lp.frequency.value = 1400;
-      g.gain.setValueAtTime(0.0001, now + off);
-      g.gain.exponentialRampToValueAtTime(0.18, now + off + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, now + off + 0.12);
-      o.connect(lp).connect(g).connect(master);
-      o.start(now + off); o.stop(now + off + 0.16);
+      lp.type = "lowpass"; lp.frequency.value = 1300;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.18, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      // 母音の共鳴（フォルマント）は並列に重ねる（直列だと通る音がほぼ無くなる）
+      const mix8 = ctx.createGain(); mix8.gain.value = FORMANT_MAKEUP;
+      o.connect(fA1).connect(mix8); o.connect(fA2).connect(mix8);
+      mix8.connect(lp).connect(g);
+      g.connect(master);
+      o.start(t0); o.stop(t0 + dur + 0.02);
     });
   }
-  // らいおん：がおー = 低音+ローパス+ビブラート
+  // らいおん：ガオー 1.0s, 低い sawtooth（110→85Hz）+ 「オ」→「ア」フォルマント（F1 500→700 F2 900→1200）
+//          + 振幅 LFO 25Hz（唸り: tremolo）+ 立ち上がりに大きなノイズバースト
   function roar() {
     if (!ctx) return;
     const now = ctx.currentTime;
+    const t0 = now;
+    const dur = jit(1.0, 0.05);
     const o = ctx.createOscillator();
-    const g = ctx.createGain();
     o.type = "sawtooth";
-    o.frequency.setValueAtTime(110, now);
-    o.frequency.exponentialRampToValueAtTime(75, now + 0.6);
-    const lp = ctx.createBiquadFilter();
-    lp.type = "lowpass"; lp.frequency.value = 420;
-    const lfo = ctx.createOscillator();
-    const lfoG = ctx.createGain();
-    lfo.type = "sine"; lfo.frequency.value = 7;
-    lfoG.gain.value = 5;
-    lfo.connect(lfoG).connect(o.frequency);
-    g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.24, now + 0.1);
-    g.gain.setValueAtTime(0.24, now + 0.5);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.85);
-    o.connect(lp).connect(g).connect(master);
-    o.start(now); o.stop(now + 0.9);
-    lfo.start(now); lfo.stop(now + 0.9);
+    o.frequency.setValueAtTime(jit(110, 0.05), t0);
+    o.frequency.exponentialRampToValueAtTime(jit(85, 0.05), t0 + dur * 0.6);
+    // フォルマント「オ」→「ア」
+    const f1 = ctx.createBiquadFilter();
+    f1.type = "bandpass"; f1.Q.value = 4;
+    f1.frequency.setValueAtTime(500, t0);
+    f1.frequency.linearRampToValueAtTime(700, t0 + dur * 0.4);
+    const f2 = ctx.createBiquadFilter();
+    f2.type = "bandpass"; f2.Q.value = 4;
+    f2.frequency.setValueAtTime(900, t0);
+    f2.frequency.linearRampToValueAtTime(1200, t0 + dur * 0.4);
+    // 振幅 LFO 25Hz（唸り）→ gain.gain に接続
+    const lfoA = ctx.createOscillator();
+    const lfoAg = ctx.createGain();
+    lfoA.frequency.value = 25;
+    lfoAg.gain.value = 0.12;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.22, t0 + 0.10);
+    lfoA.connect(lfoAg).connect(g.gain);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    // 母音の共鳴（フォルマント）は並列に重ねる（直列だと通る音がほぼ無くなる）
+    const mix9 = ctx.createGain(); mix9.gain.value = FORMANT_MAKEUP;
+    o.connect(f1).connect(mix9); o.connect(f2).connect(mix9);
+    mix9.connect(g);
+    g.connect(master);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+    lfoA.start(t0); lfoA.stop(t0 + dur + 0.02);
+    // 立ち上がりに大きなノイズバースト
+    noiseBurst(t0, 0.10, 0.18, 1200);
   }
 
   /* --------------- 効果音 --------------- */
@@ -873,29 +1087,33 @@ const SoundKit = (() => {
   }
 
   /* --------------- 鳴き声テーブル --------------- */
-  // 絵文字 / 鳴き声 / 読み上げテキスト
+  // 絵文字 / 鳴き声ラベル（読み上げ廃止により read フィールドは削除）
   const animals = [
-    {emo:"🐶", sound:"わんわん",       read:"わんわん",       fn: bark  },
-    {emo:"🐱", sound:"にゃーにゃー",   read:"にゃーにゃー",   fn: meow  },
-    {emo:"🐮", sound:"もーもー",       read:"もーもー",       fn: moo   },
-    {emo:"🐷", sound:"ぶーぶー",       read:"ぶーぶー",       fn: oink  },
-    {emo:"🐔", sound:"こけこっこー",   read:"こけこっこー",   fn: cluck },
-    {emo:"🐑", sound:"めーめー",       read:"めーめー",       fn: baa   },
-    {emo:"🐴", sound:"ひひーん",       read:"ひひーん",       fn: neigh },
-    {emo:"🐸", sound:"げろげろ",       read:"げろげろ",       fn: croak },
-    {emo:"🦆", sound:"がーがー",       read:"がーがー",       fn: quack },
-    {emo:"🦁", sound:"がおー",         read:"がおー",         fn: roar  },
+    {emo:"🐶", vol:0.45, sound:"わんわん",       fn: bark  },
+    {emo:"🐱", vol:1.0, sound:"にゃーにゃー",   fn: meow  },
+    {emo:"🐮", vol:0.4, sound:"もーもー",       fn: moo   },
+    {emo:"🐷", vol:0.65, sound:"ぶーぶー",       fn: oink  },
+    {emo:"🐔", vol:0.4, sound:"こけこっこー",   fn: cluck },
+    {emo:"🐑", vol:0.5, sound:"めーめー",       fn: baa   },
+    {emo:"🐴", vol:1.1, sound:"ひひーん",       fn: neigh },
+    {emo:"🐸", vol:3.2, sound:"げろげろ",       fn: croak },
+    {emo:"🦆", vol:0.55, sound:"がーがー",       fn: quack },
+    {emo:"🦁", vol:0.35, sound:"がおー",         fn: roar  },
   ];
 
   function playAnimal(idx) {
     const a = animals[idx];
     if (!a) return;
     ensureRunning();
-    // 鳴き声の最長は roar ≒ 0.9s、余裕を 1.2s にする
+    // 鳴き声の最長は moo/neigh ≒ 1.1s、余裕を 1.2s にする
     // acquireVoice 内の setTimeout が自動で解放するので、手動の releaseVoice は呼ばない
     if (!acquireVoice(1200)) return;
-    a.fn();                                  // 合成音（即時）
-    setTimeout(() => safeSpeak(a.read), 250); // 読み上げを 250ms 遅らせ、合成音と被せる
+    // 動物ごとの音量補正（フォルマント並列後の実測値で揃えた）。master を一時的に差し替えて鳴らす
+    if (!ctx || !master) return;
+    const savedMaster = master;
+    const bus = ctx.createGain(); bus.gain.value = a.vol || 1; bus.connect(savedMaster);
+    master = bus;
+    try { a.fn(); } finally { master = savedMaster; }   // 合成音（即時）のみ。読み上げは廃止。
   }
   function playPop()  {
     ensureRunning();
@@ -1115,13 +1333,15 @@ const SoundKit = (() => {
 
 /* =====================================================================
    音声アンロックのグローバル監視
-   - iOS Safari（実機 iPad）は pointerdown / touchstart の中では AudioContext や
-     speechSynthesis のロックを解除しないことがある。確実に許可されるのは
-     touchend / pointerup / click の中でなので、どこからタップが飛んで来ても
-     capture:true で拾って SoundKit.unlock() を呼ぶ。
+   - iOS Safari（実機 iPad）は pointerdown / touchstart の中では AudioContext の
+     ロックを解除しないことがある。確実に許可されるのは touchend / pointerup / click
+     の中なので、どこからタップが飛んで来ても capture:true で拾って
+     SoundKit.unlock() を呼ぶ。
    - preventDefault はしない（passive:true）。既存の各モードのハンドラも邪魔しない。
    - unlock() 自体は ctx.state === "running" になるまで何度でも試すが、
      running になった後は重い処理は飛ばすので、毎タップで呼んでも軽い。
+   - 以前は speechSynthesis のロック解除も同じ仕組みで必要だったが、読み上げを
+     廃止したため AudioContext のみ気にすればよくなった。
    ===================================================================== */
 function safeUnlockAudio() {
   try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
@@ -1139,60 +1359,6 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("pageshow",  safeResumeAudio);
 window.addEventListener("focus",    safeResumeAudio);
-
-/* =====================================================================
-   読み上げ (speechSynthesis)
-   - ja-JP、rate 0.8、pitch 1.5
-   - 失敗しても握り潰さず無音で続行
-   - 日本語音声は getVoices() が非同期で来るので voiceschanged で再取得
-   - iOS は最初の speak がユーザー操作の同期処理内でないと無音 → 初回タップで
-     volume 0 の空の発話 (" ") でプライミング
-   ===================================================================== */
-let jaVoice = null;
-let ttsPrimed = false;
-function pickJapaneseVoice() {
-  if (!("speechSynthesis" in window)) return;
-  const voices = window.speechSynthesis.getVoices();
-  if (!voices || !voices.length) return;
-  jaVoice =
-    voices.find(v => v.lang === "ja-JP") ||
-    voices.find(v => v.lang && v.lang.toLowerCase().startsWith("ja")) ||
-    null;
-}
-if ("speechSynthesis" in window) {
-  pickJapaneseVoice();
-  // voiceschanged は iOS / Chrome で非同期に発火する
-  window.speechSynthesis.onvoiceschanged = pickJapaneseVoice;
-}
-function primeTTS() {
-  if (ttsPrimed) return;
-  if (!("speechSynthesis" in window)) return;
-  try {
-    const u = new SpeechSynthesisUtterance(" ");
-    u.volume = 0;
-    u.lang = "ja-JP";
-    if (jaVoice) u.voice = jaVoice;
-    window.speechSynthesis.speak(u);
-    ttsPrimed = true;
-  } catch (err) { /* ignore */ }
-}
-function safeSpeak(text) {
-  try {
-    if (!("speechSynthesis" in window)) return;
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "ja-JP";
-    u.rate = 0.8;
-    u.pitch = 1.5;
-    u.volume = 0.7;                          // 合成音(0.05 前後)より大きくしすぎない
-    if (jaVoice) u.voice = jaVoice;
-    // 古い読みが残っていると遅れるので、毎回キャンセルしてから投入
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(u);
-  } catch (err) {
-    // 例外はコメントだけ残して握り潰す（無音で続行）
-    console.warn("[tts] failed:", err);
-  }
-}
 
 /* =====================================================================
    手のひら判定（現在 常時 false = 無効）
@@ -1404,9 +1570,8 @@ function triggerFinish(now) {
     playTimer.cumulativeMs += now - playTimer.inModeStartMs;
   }
   playTimer.inMode = false;
-  // 終了音 → 読み上げ → フェードでおしまい画面へ
+  // 終了音 → フェードでおしまい画面へ（読み上げは廃止）
   SoundKit.finishTone();
-  safeSpeak("おしまい");
   fadeThenFinish();
 }
 
@@ -1976,7 +2141,6 @@ function setupBalloonTap() {
     if (hit) {
       hit.alive = false;
       SoundKit.playPop();
-      safeSpeak(hit.name);
       spawnParticles(hit.x, hit.y, hit.color, 40);
     } else {
       // 何もない所をタップ → そこに風船
@@ -2385,9 +2549,9 @@ function buildClouds() {
   // 雲の絵文字サイズは短辺の 13% 程度
   const cloudSize = Math.min(window.innerWidth, window.innerHeight) * 0.13;
   const positions = [
-    { l: 12, t:  8 },   // 左上
-    { l: 68, t: 20 },   // 右上
-    { l: 42, t: 34 },   // 中央やや上
+    { l: 12, t:  6 },   // 左上
+    { l: 68, t: 13 },   // 右上
+    { l: 40, t:  8 },   // 中央上（雲は空の領域＝上から約 32% より上にだけ置く）
   ];
   for (const p of positions) {
     const el = document.createElement("div");
