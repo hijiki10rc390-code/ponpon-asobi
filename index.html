@@ -285,6 +285,39 @@
   }
   .music-key.black.pressed::after { opacity: .60; }
 
+  /* ===== おえかき ===== */
+  #stage-draw {
+    /* 白に近いクリーム色。指でなぞると太い線が描ける */
+    background: #fffaf0;
+  }
+  /* 「けす」ボタン（画面右下の大きな丸）。.home-btn と同じ見た目・サイズ。
+     z-index は canvas (.mode-canvas の 5) より大きく、描画と干渉しない */
+  #draw-clear-btn {
+    position: absolute;
+    right: max(24px, env(safe-area-inset-right, 0px));
+    bottom: max(24px, env(safe-area-inset-bottom, 0px));
+    width: clamp(72px, 11vmin, 120px);
+    height: clamp(72px, 11vmin, 120px);
+    border-radius: 50%;
+    background: rgba(255,255,255,.85);
+    border: 0;
+    font-size: clamp(28px, 5vmin, 48px);
+    line-height: 1;
+    text-align: center;
+    z-index: 20;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform .12s ease;
+  }
+  #draw-clear-btn:active { transform: scale(.96); }
+
   /* ===== のりもの ===== */
   #stage-vehicle {
     /* 上 65% が空（薄い水色）、下 35% が地面（緑）のグラデ。
@@ -418,6 +451,7 @@
     <button class="home-card" data-mode="color" aria-label="いろ"></button>
     <button class="home-card" data-mode="music" aria-label="おとあそび"></button>
     <button class="home-card" data-mode="vehicle" aria-label="のりもの"></button>
+    <button class="home-card" data-mode="draw" aria-label="おえかき"></button>
   </div>
 </section>
 
@@ -452,6 +486,13 @@
 <section id="stage-vehicle" class="stage">
   <button class="home-btn" aria-label="ホームへ"><canvas></canvas>🏠</button>
   <div id="vehicle-area"></div>
+</section>
+
+<!-- ========= おえかき ========= -->
+<section id="stage-draw" class="stage">
+  <button class="home-btn" aria-label="ホームへ"><canvas></canvas>🏠</button>
+  <canvas class="mode-canvas" id="draw-canvas"></canvas>
+  <button id="draw-clear-btn" aria-label="けす">🧽</button>
 </section>
 
 <!-- ========= おしまい ========= -->
@@ -1338,6 +1379,7 @@ const stages = {
   color:   document.getElementById("stage-color"),
   music:   document.getElementById("stage-music"),
   vehicle: document.getElementById("stage-vehicle"),
+  draw:    document.getElementById("stage-draw"),
   finish:  document.getElementById("stage-finish"),
 };
 let currentMode = "home";
@@ -1383,12 +1425,13 @@ function showMode(mode) {
     if (mode === "color")   initColor();
     if (mode === "music")   initMusic();
     if (mode === "vehicle") initVehicle();
+    if (mode === "draw")    initDraw();
     // finish は init 不要（DOM は静的）
   });
 
   // 新しいモードが「計測対象」なら開始
   if (mode === "animal" || mode === "balloon" || mode === "color" ||
-      mode === "music"  || mode === "vehicle") {
+      mode === "music"  || mode === "vehicle" || mode === "draw") {
     onEnterMode(performance.now());
   }
 }
@@ -2404,6 +2447,221 @@ function setupVehicleTap() {
 }
 
 /* =====================================================================
+   モード：おえかき
+   - クリーム色のキャンバスに指でなぞると太い線が描ける。描いた線は画面に残る。
+   - ストローク（1 回なぞり）ごとに自動で色が変わる（赤→橙→黄→緑→青→紫→ピンク）。
+     子供に色を選ばせない／考えさせない方針。
+   - マルチタッチ対応（pointerId ごとに現在のストロークを管理）。
+     掌は無視、pointercancel/pointerup で終了。isPalmTouch は通常のタップ扱い。
+   - リサイズ・回転に耐えるため、ストロークは正規化座標（0〜1）で保持し、
+     毎フレームの全ストローク再描画と move 時の差分描画を併用する。
+   - HiDPI（devicePixelRatio）対応は setupModeCanvas に任せる。
+   - 先端には小さなきらきら粒子、ストローク開始時に色に対応する短い音を 1 回だけ鳴らす。
+   - 「けす」ボタン（🧽）で全部消える。短いタップで OK（誤操作しても困らない遊び）。
+   ===================================================================== */
+// ストロークごとに自動で選ぶ色（赤橙黄緑青紫ピンク、順に巡回）。
+// 濃すぎず明るい色。子供になじみのある 7 色。
+const DRAW_COLORS = [
+  "#ff5a5f",  // 赤
+  "#ff8a3d",  // 橙
+  "#ffd60a",  // 黄
+  "#06d6a0",  // 緑
+  "#3a86ff",  // 青
+  "#9b5de5",  // 紫
+  "#ff80aa",  // ピンク
+];
+// 色ごとに鳴らす音の高さ（C5 メジャースケール相当、やわらかい高音）。
+const DRAW_FREQS = [523.25, 587.33, 659.26, 698.46, 783.99, 880.00, 987.77];
+// ストロークと描画済み（正規化座標）の蓄積。永続的なので長時間は膨らむが、
+// 子供が描く量なら高々数百〜数千ポイントで収まる（毎フレーム再描画しても軽い）。
+const drawStrokes = [];   // {points:[{nx,ny}], color, width}
+let drawColorIndex = 0;   // 次のストロークで使う色のインデックス
+
+function pickNextDrawColor() {
+  const i = drawColorIndex % DRAW_COLORS.length;
+  drawColorIndex++;
+  return { color: DRAW_COLORS[i], freq: DRAW_FREQS[i] };
+}
+
+function initDraw() {
+  drawStrokes.length = 0;
+  drawColorIndex = 0;
+  particles.length = 0;
+  const cv = document.getElementById("draw-canvas");
+  const onResize = setupModeCanvas(cv);
+  bindResize(onResize);
+  loopDraw(cv);
+}
+
+// ストロークを canvas に描画する共通処理（points を正規化座標として渡す）
+function drawStroke(ctx2d, w, h, stroke) {
+  const pts = stroke.points;
+  if (!pts || pts.length === 0) return;
+  ctx2d.save();
+  ctx2d.strokeStyle = stroke.color;
+  ctx2d.fillStyle   = stroke.color;
+  ctx2d.lineWidth   = stroke.width;
+  ctx2d.lineCap     = "round";
+  ctx2d.lineJoin    = "round";
+  // 1 本の線
+  if (pts.length >= 2) {
+    ctx2d.beginPath();
+    ctx2d.moveTo(pts[0].nx * w, pts[0].ny * h);
+    for (let i = 1; i < pts.length; i++) {
+      ctx2d.lineTo(pts[i].nx * w, pts[i].ny * h);
+    }
+    ctx2d.stroke();
+  }
+  // 単一点（タップだけ）のときも丸い点が見えるよう、lineCap="round" 効果と
+  // は別に fill で重ねる（短辺 2.4% を直径とする丸）
+  if (pts.length === 1) {
+    ctx2d.beginPath();
+    ctx2d.arc(pts[0].nx * w, pts[0].ny * h, stroke.width / 2, 0, Math.PI * 2);
+    ctx2d.fill();
+  }
+  // 先端の強調（点も線も、見た目が一目で「ここに指がある」と分かるよう少し濃い丸を重ねる）
+  const last = pts[pts.length - 1];
+  ctx2d.beginPath();
+  ctx2d.arc(last.nx * w, last.ny * h, stroke.width * 0.55, 0, Math.PI * 2);
+  ctx2d.fill();
+  ctx2d.restore();
+}
+
+function loopDraw(cv) {
+  const ctx2d = cv.getContext("2d");
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    const w = cv.clientWidth, h = cv.clientHeight;
+
+    // 背景の透明部分を stage の #fffaf0 に任せるため、ここではクリアだけ
+    ctx2d.clearRect(0, 0, w, h);
+
+    // 既存のストロークを順次描画（リサイズ・回転に対応）
+    for (const s of drawStrokes) {
+      drawStroke(ctx2d, w, h, s);
+    }
+    // きらきら粒子
+    updateParticles(dt);
+    drawParticles(ctx2d);
+
+    // モード離脱時はループ停止（再入場で initDraw が loopDraw を起こす）
+    if (currentMode === "draw") requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+function setupDrawTap() {
+  const cv = document.getElementById("draw-canvas");
+  if (!cv) return;
+  // pointerId ごとに「いま描いているストローク」を覚えてマルチタッチに対応
+  const pointers = new Map();
+
+  function getXY(e) {
+    // touches / pointer のいずれかから座標を取る（既存モードと同じ慣習）
+    if (e.touches && e.touches[0]) return {x: e.touches[0].clientX, y: e.touches[0].clientY};
+    return {x: e.clientX, y: e.clientY};
+  }
+
+  function onDown(e) {
+    e.preventDefault();
+    // 掌相当の接触は無視（他モードと同じ）
+    if (isPalmTouch(e)) return;
+    SoundKit.unlock();
+    tryFullscreen();
+    const {x, y} = getXY(e);
+    const r = cv.getBoundingClientRect();
+    const lx = x - r.left, ly = y - r.top;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    if (w <= 0 || h <= 0) return;
+    const { color, freq } = pickNextDrawColor();
+    // 線幅：画面短辺の 2.4%、最小 10px
+    const base = Math.min(window.innerWidth, window.innerHeight);
+    const lineW = Math.max(10, base * 0.024);
+    const stroke = {
+      points: [{ nx: Math.max(0, Math.min(1, lx / w)),
+                 ny: Math.max(0, Math.min(1, ly / h)) }],
+      color, width: lineW,
+    };
+    pointers.set(e.pointerId, stroke);
+    drawStrokes.push(stroke);
+    // ストローク開始時の音を 1 回だけ鳴らす（playNote が内部で acquireVoice して上限管理）
+    SoundKit.playNote(freq, 0.22, 0.16);
+    // 描き始めの先端に少量きらきら
+    spawnParticles(lx, ly, color, 8);
+  }
+
+  function onMove(e) {
+    const stroke = pointers.get(e.pointerId);
+    if (!stroke) return;
+    e.preventDefault();
+    const {x, y} = getXY(e);
+    const r = cv.getBoundingClientRect();
+    const lx = x - r.left, ly = y - r.top;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    if (w <= 0 || h <= 0) return;
+    const nx = Math.max(0, Math.min(1, lx / w));
+    const ny = Math.max(0, Math.min(1, ly / h));
+    const prev = stroke.points[stroke.points.length - 1];
+    // 同一座標を間引いて、無駄な点を増やさない（指の細かい揺れで線が黒く
+    // つぶれるのを防ぐ）。閾値は線幅の半分より少し小さめ。
+    if (prev && Math.hypot((nx - prev.nx) * w, (ny - prev.ny) * h) < stroke.width * 0.4) {
+      return;
+    }
+    stroke.points.push({ nx, ny });
+    // move 時は「増えた末尾だけ」を描画（毎フレームの全ストローク再描画より軽量）
+    const ctx2d = cv.getContext("2d");
+    ctx2d.save();
+    ctx2d.strokeStyle = stroke.color;
+    ctx2d.lineWidth   = stroke.width;
+    ctx2d.lineCap     = "round";
+    ctx2d.lineJoin    = "round";
+    ctx2d.beginPath();
+    ctx2d.moveTo(prev.nx * w, prev.ny * h);
+    ctx2d.lineTo(nx * w, ny * h);
+    ctx2d.stroke();
+    // 先端の濃い丸（描画の「今」感を残す）
+    ctx2d.beginPath();
+    ctx2d.arc(nx * w, ny * h, stroke.width * 0.55, 0, Math.PI * 2);
+    ctx2d.fill();
+    ctx2d.restore();
+  }
+
+  function onUp(e) {
+    if (e && e.pointerId != null) pointers.delete(e.pointerId);
+    if (e && e.preventDefault) e.preventDefault();
+  }
+
+  cv.addEventListener("pointerdown",   onDown, {passive:false});
+  cv.addEventListener("pointermove",   onMove, {passive:false});
+  cv.addEventListener("pointerup",     onUp,   {passive:false});
+  cv.addEventListener("pointercancel", onUp,   {passive:false});
+  // pointerleave は iOS 保険（家の終了時に map をクリア）
+  cv.addEventListener("pointerleave",  onUp,   {passive:false});
+  cv.addEventListener("click",         e => e.preventDefault());
+
+  // 「けす」ボタン：タップで描画を全部クリア（短いタップで OK）
+  const clearBtn = document.getElementById("draw-clear-btn");
+  if (clearBtn) {
+    clearBtn.addEventListener("pointerdown", ev => {
+      ev.preventDefault();
+      if (isPalmTouch(ev)) return;
+      SoundKit.unlock();
+      tryFullscreen();
+      drawStrokes.length = 0;
+      particles.length = 0;
+      // クリア時の軽いフィードバック音（他モードの playTwinkle と同系のきらきら音）
+      SoundKit.playTwinkle();
+    });
+    // pointerup を抑止して意図しない二重発火や隣のタップを巻き込まない
+    clearBtn.addEventListener("pointerup",     ev => ev.preventDefault());
+    clearBtn.addEventListener("pointercancel", ev => ev.preventDefault());
+    clearBtn.addEventListener("click",         ev => ev.preventDefault());
+  }
+}
+
+/* =====================================================================
    ホーム：カードでモード切替
    ===================================================================== */
 function setupHomeCards() {
@@ -2415,7 +2673,7 @@ function setupHomeCards() {
       showMode(card.dataset.mode);
     });
     // 絵文字だけ表示（対象児が読める文字なし）
-    const map = { animal:"🐶", balloon:"🎈", color:"🎨", music:"🎹", vehicle:"🚗" };
+    const map = { animal:"🐶", balloon:"🎈", color:"🎨", music:"🎹", vehicle:"🚗", draw:"🖍️" };
     card.textContent = map[card.dataset.mode] || "•";
   });
 }
@@ -2446,6 +2704,7 @@ function start() {
   setupColorTap();
   setupMusicTap();
   setupVehicleTap();
+  setupDrawTap();
   setupFinishStage();
   // タブが裏に行ったときは時間計測を止める
   document.addEventListener("visibilitychange", () => {
