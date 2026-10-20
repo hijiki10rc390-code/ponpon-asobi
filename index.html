@@ -50,20 +50,35 @@
     position: absolute;
     inset: 0;
     display: flex;
-    flex-direction: column;
+    flex-wrap: wrap;
     justify-content: center;
-    align-items: center;
-    gap: 4vh;
-    padding: env(safe-area-inset-top, 0) 5vw env(safe-area-inset-bottom, 0);
+    align-items: center;          /* 行内のカード縦中央 */
+    align-content: center;        /* 複数行をコンテナ中央に寄せる（縦向きの大空白解消） */
+    gap: 3vmin;
+    /* ⏱(右上, height≒11vmin+top24) と 🏠(左上, 同上) の下にカード 1 行目が
+       食い込まないよう、ホームのカード領域に上下 200/60px の非対称な固定余白を確保する。
+       実測 (1376x1032 横向き) で timer-status の箱が y=150〜186、右上カードが y=170 からで
+       16px 重なっていたため padding-top を 200px に。
+       padding-bottom は 60px に縮めて画面を有効に使う（上下合計 260px）。
+       safe-area がそれを超える端末（現状は iOS が最大でも ~50px）は
+       max() で常にそれぞれの固定値を下限にする。中央寄せは align-content:center で成立。 */
+    padding-top:    max(200px, env(safe-area-inset-top, 0px));
+    padding-bottom: max(60px,  env(safe-area-inset-bottom, 0px));
+    padding-left:   4vw;
+    padding-right:  4vw;
+    /* カード 1 辺を CSS 変数で公開。絵文字サイズ (card * 0.55) の基準にも使う。
+       - 上限 40vmin (カードが際限なく大きくならないように)
+       - 横方向制約: 3 枚 + gap 2 つ ≤ 100vw
+       - 縦方向制約: 2 枚 + gap 1 つ ≤ (100vh - 上下余白合計 260px)
+       → 上下の固定余白が 200px / 60px なので、合計 260px で計算する。 */
+    --card: min(40vmin, calc((100vw - 6vmin) / 3), calc((100vh - 260px - 3vmin) / 2));
   }
   .home-card {
-    /* 縦持ち：正方形カード。
-       1 辺 = min(40vmin, (100vh - 余白12vh)/3 - gap4vh) とし、
-       縦 834/1194/1376 で 3 枚が 🏠⏱ と重ならず画面内に収まるようにする。
-       絵文字はカード 1 辺の 55%（40vmin × 0.55 ≒ 22vmin） */
-    width: min(40vmin, calc((100vh - 12vh) / 3 - 4vh));
-    max-width: none;
-    min-height: 72px;
+    /* カード 1 辺は .wrap の --card (25〜30vmin 相当)。
+       絵文字はカード 1 辺の 55% (font-size: calc(var(--card) * 0.55))。 */
+    width: var(--card);
+    /* max-width 220px は廃止 (iPad では小さく見える)。上限は 40vmin のキャップで十分。 */
+    min-width: 72px;
     aspect-ratio: 1 / 1;
     border: 0;
     border-radius: 28px;
@@ -72,7 +87,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 22vmin;
+    font-size: calc(var(--card) * 0.55);
     line-height: 1;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
@@ -82,17 +97,6 @@
     transition: transform .12s ease;
   }
   .home-card:active { transform: scale(.96); }
-
-  /* 横持ち：3 枚を正方形で横並びに。
-     1 辺 30vmin、絵文字はその 57% ≒ 17vmin。
-     3 枚 + gap 2 つ = 96vmin < 短辺 100vmin に収まる */
-  @media (orientation: landscape) {
-    #stage-home .wrap { flex-direction: row; gap: 3vmin; }
-    .home-card {
-      width: 30vmin;
-      font-size: 17vmin;
-    }
-  }
 
   /* ===== 共通ヘッダー（🏠ボタン） ===== */
   .home-btn {
@@ -168,6 +172,79 @@
   /* ===== いろ ===== */
   #stage-color {
     background: #0b1020;
+  }
+
+  /* ===== おとあそび（鍵盤） ===== */
+  #stage-music {
+    background: linear-gradient(180deg, #e8ddff 0%, #d4d4ff 100%);
+  }
+  #music-keys {
+    position: absolute;
+    /* safe-area を避けつつ縦向きでも画面を使い切る。
+       top 14%, bottom 14%, 左右 3vw を引いた領域に鍵盤を配置 */
+    left: 3vw;
+    right: 3vw;
+    top: 14%;
+    bottom: 14%;
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 1.5vmin;
+  }
+  .music-key {
+    border: 0;
+    border-radius: 24px;
+    box-shadow: 0 6px 0 rgba(0,0,0,.18);
+    pointer-events: auto;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    cursor: pointer;
+    transition: transform 80ms ease, filter 80ms ease, box-shadow 80ms ease;
+  }
+  .music-key.pressed {
+    transform: scale(1.05);
+    filter: brightness(1.25) saturate(1.25);
+    box-shadow: 0 3px 0 rgba(0,0,0,.25);
+  }
+
+  /* ===== のりもの ===== */
+  #stage-vehicle {
+    /* 上 65% が空（薄い水色）、下 35% が地面（緑）のグラデ。
+       真ん中付近に薄い雲っぽい白を 1 本入れる */
+    background: linear-gradient(180deg, #a8def9 0%, #c5e8f7 60%, #7cb342 60%, #558b2f 100%);
+  }
+  #vehicle-area {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;       /* 乗っていない領域は親に流さない */
+  }
+  .vehicle {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    /* 絵文字を中央配置するため translate(-50%, 0) を transform 側で組み合わせる前提 */
+    font-size: 22vmin;   /* 30 → 22: 3 台が地面幅に並び、重ならないサイズ */
+    line-height: 1;
+    pointer-events: auto;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    cursor: pointer;
+    will-change: transform;
+    transform-origin: center center;
+  }
+  /* 雲：のりもの画面の空に浮かべる背景装飾（タップ反応なし） */
+  .cloud {
+    position: absolute;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
+    line-height: 1;
+    z-index: 1;            /* .vehicle (top) より奥、見えたらよい */
   }
 
   /* ===== タイマー設定（親用：ホーム右上の小さな⏱） ===== */
@@ -263,6 +340,8 @@
     <button class="home-card" data-mode="animal" aria-label="どうぶつ"></button>
     <button class="home-card" data-mode="balloon" aria-label="ふうせん"></button>
     <button class="home-card" data-mode="color" aria-label="いろ"></button>
+    <button class="home-card" data-mode="music" aria-label="おとあそび"></button>
+    <button class="home-card" data-mode="vehicle" aria-label="のりもの"></button>
   </div>
 </section>
 
@@ -285,6 +364,18 @@
 <section id="stage-color" class="stage">
   <button class="home-btn" aria-label="ホームへ"><canvas></canvas>🏠</button>
   <canvas class="mode-canvas" id="color-canvas"></canvas>
+</section>
+
+<!-- ========= おとあそび ========= -->
+<section id="stage-music" class="stage">
+  <button class="home-btn" aria-label="ホームへ"><canvas></canvas>🏠</button>
+  <div id="music-keys"></div>
+</section>
+
+<!-- ========= のりもの ========= -->
+<section id="stage-vehicle" class="stage">
+  <button class="home-btn" aria-label="ホームへ"><canvas></canvas>🏠</button>
+  <div id="vehicle-area"></div>
 </section>
 
 <!-- ========= おしまい ========= -->
@@ -715,10 +806,169 @@ const SoundKit = (() => {
     playNote(freq, 0.18, 0.16);
   }
 
+  /* --------------- おとあそび：長音階（C4〜B4） --------------- */
+  // ドレミファソラシ。やわらかい音色（triangle + 倍音）
+  const musicScale = [
+    261.63,  // C4 ド
+    293.66,  // D4 レ
+    329.63,  // E4 ミ
+    349.23,  // F4 ファ
+    392.00,  // G4 ソ
+    440.00,  // A4 ラ
+    493.88,  // B4 シ
+  ];
+  function playMusicNote(idx, dur = 0.6) {
+    if (!ctx) return;
+    const freq = musicScale[idx];
+    if (freq == null) return;
+    // playNote と同じ envelope で、durations だけ長め。発音の入口で 1 回だけ acquire。
+    // 倍音(o2)も 1 note = 1 voice として数える設計に揃えるため playNote をそのまま呼ぶ
+    playNote(freq, dur, 0.18);
+  }
+
+  /* --------------- のりもの：擬音 --------------- */
+  // 車：ブッブー = 低い矩形波を 2 発
+  function hornCar() {
+    if (!ctx) return;
+    if (!acquireVoice(800)) return;
+    const now = ctx.currentTime;
+    [0, 0.22].forEach(off => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "square";
+      o.frequency.setValueAtTime(330, now + off);
+      o.frequency.setValueAtTime(330, now + off + 0.10);
+      g.gain.setValueAtTime(0.0001, now + off);
+      g.gain.exponentialRampToValueAtTime(0.16, now + off + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + off + 0.16);
+      o.connect(g).connect(master);
+      o.start(now + off); o.stop(now + off + 0.20);
+    });
+  }
+  // バス：プップー = やや高めの矩形波 2 発
+  function hornBus() {
+    if (!ctx) return;
+    if (!acquireVoice(800)) return;
+    const now = ctx.currentTime;
+    [0, 0.24].forEach(off => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "triangle";
+      o.frequency.setValueAtTime(440, now + off);
+      o.frequency.setValueAtTime(440, now + off + 0.12);
+      g.gain.setValueAtTime(0.0001, now + off);
+      g.gain.exponentialRampToValueAtTime(0.16, now + off + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + off + 0.16);
+      o.connect(g).connect(master);
+      o.start(now + off); o.stop(now + off + 0.20);
+    });
+  }
+  // 電車：ガタンゴトン = 低音を「ガタン」「ガタン」と 2 回刻む
+  function hornTrain() {
+    if (!ctx) return;
+    if (!acquireVoice(1000)) return;
+    const now = ctx.currentTime;
+    // 4 ヒット: ガ・タン・ゴ・トン。低→高→低→高
+    const seq = [
+      {t:0.00, f:180, d:0.10, g:0.20},
+      {t:0.14, f:520, d:0.06, g:0.14},
+      {t:0.32, f:180, d:0.10, g:0.20},
+      {t:0.46, f:520, d:0.06, g:0.14},
+    ];
+    seq.forEach(s => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "square";
+      o.frequency.value = s.f;
+      g.gain.setValueAtTime(0.0001, now + s.t);
+      g.gain.exponentialRampToValueAtTime(s.g, now + s.t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + s.t + s.d);
+      o.connect(g).connect(master);
+      o.start(now + s.t); o.stop(now + s.t + s.d + 0.02);
+    });
+  }
+  // 消防車：ウーウー = 低いサイン波のポルタメント（上→下）
+  function hornFire() {
+    if (!ctx) return;
+    if (!acquireVoice(1200)) return;
+    const now = ctx.currentTime;
+    [0, 0.42].forEach(off => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.frequency.setValueAtTime(620, now + off);
+      o.frequency.exponentialRampToValueAtTime(380, now + off + 0.35);
+      g.gain.setValueAtTime(0.0001, now + off);
+      g.gain.exponentialRampToValueAtTime(0.18, now + off + 0.04);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + off + 0.40);
+      o.connect(g).connect(master);
+      o.start(now + off); o.stop(now + off + 0.42);
+    });
+  }
+  // パトカー：ピーポー = 高低交互（先細切形）
+  function hornPolice() {
+    if (!ctx) return;
+    if (!acquireVoice(1100)) return;
+    const now = ctx.currentTime;
+    // ピ(高)→ポー(低)→ピ(高)→ポー(低)、計 4 発
+    const seq = [
+      {t:0.00, f:880,  d:0.10},
+      {t:0.20, f:620,  d:0.20},
+      {t:0.50, f:880,  d:0.10},
+      {t:0.70, f:620,  d:0.20},
+    ];
+    seq.forEach(s => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "square";
+      o.frequency.value = s.f;
+      g.gain.setValueAtTime(0.0001, now + s.t);
+      g.gain.exponentialRampToValueAtTime(0.16, now + s.t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + s.t + s.d);
+      o.connect(g).connect(master);
+      o.start(now + s.t); o.stop(now + s.t + s.d + 0.02);
+    });
+  }
+  // トラクター：ブルルル = 低めのこぎり波を連続
+  function hornTractor() {
+    if (!ctx) return;
+    if (!acquireVoice(900)) return;
+    const now = ctx.currentTime;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    const lp = ctx.createBiquadFilter();
+    o.type = "sawtooth";
+    o.frequency.value = 110;
+    lp.type = "lowpass"; lp.frequency.value = 600;
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.18, now + 0.06);
+    g.gain.setValueAtTime(0.18, now + 0.60);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.80);
+    o.connect(lp).connect(g).connect(master);
+    o.start(now); o.stop(now + 0.85);
+  }
+
+  // 乗り物の絵文字と擬音の対応（タップのたびに別の絵文字へ変えて OK なのでシャッフル利用）
+  const vehicles = [
+    { emo:"🚗", name:"くるま",   fn: hornCar    },
+    { emo:"🚌", name:"バス",     fn: hornBus    },
+    { emo:"🚃", name:"でんしゃ", fn: hornTrain  },
+    { emo:"🚒", name:"しょうぼうしゃ", fn: hornFire    },
+    { emo:"🚓", name:"パトカー", fn: hornPolice },
+    { emo:"🚜", name:"トラクター", fn: hornTractor },
+  ];
+  function playVehicleSound(kind) {
+    const v = vehicles[kind];
+    if (!v) return;
+    v.fn();
+  }
+
   return {
     unlock, tryResume,
     playAnimal, playPop, playTwinkle, finishTone,
     noteForX, playNote, playNoteSmall,
+    playMusicNote, musicScale,
+    playVehicleSound, vehicles,
     animals,
   };
 })();
@@ -1002,6 +1252,8 @@ const stages = {
   animal:  document.getElementById("stage-animal"),
   balloon: document.getElementById("stage-balloon"),
   color:   document.getElementById("stage-color"),
+  music:   document.getElementById("stage-music"),
+  vehicle: document.getElementById("stage-vehicle"),
   finish:  document.getElementById("stage-finish"),
 };
 let currentMode = "home";
@@ -1045,11 +1297,14 @@ function showMode(mode) {
     if (mode === "animal")  initAnimal();
     if (mode === "balloon") initBalloon();
     if (mode === "color")   initColor();
+    if (mode === "music")   initMusic();
+    if (mode === "vehicle") initVehicle();
     // finish は init 不要（DOM は静的）
   });
 
   // 新しいモードが「計測対象」なら開始
-  if (mode === "animal" || mode === "balloon" || mode === "color") {
+  if (mode === "animal" || mode === "balloon" || mode === "color" ||
+      mode === "music"  || mode === "vehicle") {
     onEnterMode(performance.now());
   }
 }
@@ -1663,6 +1918,357 @@ function setupColorTap() {
 }
 
 /* =====================================================================
+   モード：おとあそび（鍵盤）
+   - 7 本の鍵、ドレミファソラシ。各鍵別の明るい色。
+   - タップで音が鳴り、鍵が光って軽く拡大。
+   - マルチタッチOK（pointerId ごとに「いま押されている鍵」を管理）。
+   - 掌は無視。ドラッグで鍵をまたいだら新しい鍵の音を鳴らす。
+   ===================================================================== */
+const MUSIC_KEY_COLORS = [
+  "#ff5a5f",  // ド：赤
+  "#ff8a3d",  // レ：オレンジ
+  "#ffd60a",  // ミ：きいろ
+  "#06d6a0",  // ファ：みどり
+  "#3a86ff",  // ソ：青
+  "#9b5de5",  // ラ：むらさき
+  "#ff80aa",  // シ：ピンク
+];
+const musicKeys = [];           // {el, idx}
+let musicKeysBuilt = false;
+
+function buildMusicKeys() {
+  if (musicKeysBuilt) return;
+  const host = document.getElementById("music-keys");
+  if (!host) return;
+  host.innerHTML = "";
+  musicKeys.length = 0;
+  for (let i = 0; i < 7; i++) {
+    const btn = document.createElement("button");
+    btn.className = "music-key";
+    btn.dataset.idx = String(i);
+    btn.style.background = MUSIC_KEY_COLORS[i];
+    host.appendChild(btn);
+    musicKeys.push({ el: btn, idx: i });
+  }
+  musicKeysBuilt = true;
+}
+
+function initMusic() {
+  buildMusicKeys();
+  particles.length = 0;
+}
+
+// 絶対座標 (x, y) → 0..6 の鍵インデックス。host の外なら -1。
+function keyIndexFromPointer(x, y) {
+  const host = document.getElementById("music-keys");
+  if (!host) return -1;
+  const r = host.getBoundingClientRect();
+  if (x < r.left || x > r.right || y < r.top || y > r.bottom) return -1;
+  // 7 等分。gap は均等割り込みなので近似で十分（指の太さ ≒ 1 鍵分なので余裕）
+  const rel = (x - r.left) / Math.max(1, r.width);
+  return Math.min(6, Math.max(0, Math.floor(rel * 7)));
+}
+
+function setupMusicTap() {
+  const host = document.getElementById("music-keys");
+  if (!host) return;
+  buildMusicKeys();
+
+  // pointerId ごとに「いまどの鍵を押しているか」を覚えて、ドラッグで鍵またぎを検知
+  const active = new Map();
+
+  function flashKey(idx) {
+    const k = musicKeys[idx];
+    if (!k) return;
+    k.el.classList.add("pressed");
+    // 短いアニメ（押しっぱなしでも 180ms で解除＝連打で固まらない）
+    setTimeout(() => k.el.classList.remove("pressed"), 180);
+  }
+
+  function playForIdx(idx, x, y) {
+    if (idx < 0 || idx > 6) return;
+    SoundKit.playMusicNote(idx, 0.6);
+    flashKey(idx);
+    // 鍵の中心付近にきらきら粒子
+    const r = musicKeys[idx].el.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    spawnParticles(cx, cy, MUSIC_KEY_COLORS[idx], 18);
+  }
+
+  function onDown(e) {
+    e.preventDefault();
+    if (isPalmTouch(e)) return;
+    SoundKit.unlock();
+    tryFullscreen();
+    const x = e.clientX, y = e.clientY;
+    const idx = keyIndexFromPointer(x, y);
+    active.set(e.pointerId, idx);
+    if (idx >= 0) playForIdx(idx, x, y);
+  }
+  function onMove(e) {
+    if (!active.has(e.pointerId)) return;
+    e.preventDefault();
+    const x = e.clientX, y = e.clientY;
+    const idx = keyIndexFromPointer(x, y);
+    const prev = active.get(e.pointerId);
+    if (idx !== prev) {
+      active.set(e.pointerId, idx);
+      if (idx >= 0) playForIdx(idx, x, y);
+    }
+  }
+  function onUp(e) {
+    if (e && e.pointerId != null) active.delete(e.pointerId);
+    if (e && e.preventDefault) e.preventDefault();
+  }
+
+  host.addEventListener("pointerdown",   onDown, {passive:false});
+  host.addEventListener("pointermove",   onMove, {passive:false});
+  host.addEventListener("pointerup",     onUp,   {passive:false});
+  host.addEventListener("pointercancel", onUp,   {passive:false});
+  host.addEventListener("pointerleave",  onUp,   {passive:false});
+  host.addEventListener("click", e => e.preventDefault());
+}
+
+/* =====================================================================
+   モード：のりもの
+   - 3 台の乗り物（🚗🚌🚃🚒🚓🚜 からランダム）、横長の道（空色＋緑の地面）。
+   - タップで走行アニメーション＋擬音。走行中の再タップで走行リスタート可。
+   ===================================================================== */
+const VEHICLE_COUNT = 3;
+// グローバル vehicles 配列は SoundKit.vehicles と被るので別名で持つ
+const runningVehicles = [];     // {el, kind, runState, t0, dur, dir, fromX, toX, x}
+let vehicleRunRaf = null;
+
+function pickRandomVehicleKind() {
+  return Math.floor(Math.random() * SoundKit.vehicles.length);
+}
+
+function buildVehicles() {
+  const host = document.getElementById("vehicle-area");
+  if (!host) return;
+  host.innerHTML = "";
+  runningVehicles.length = 0;
+  const W0 = window.innerWidth;
+  for (let i = 0; i < VEHICLE_COUNT; i++) {
+    const el = document.createElement("div");
+    el.className = "vehicle";
+    const kind = pickRandomVehicleKind();
+    el.textContent = SoundKit.vehicles[kind].emo;
+    host.appendChild(el);
+    runningVehicles.push({
+      el, kind,
+      runState: "idle",          // "idle" | "running" | "returning"
+      t0: 0, dur: 1.2,
+      dir: 1,                     // +1: 右へ、-1: 左へ
+      fromX: 0, toX: 0,
+      // 待機位置（左・中央・右）。layoutVehicles() で詳細を最終決定
+      slotX: W0 * (i === 0 ? 0.25 : i === 1 ? 0.5 : 0.75),
+      slotI: i,
+      x:      W0 * (i === 0 ? 0.25 : i === 1 ? 0.5 : 0.75),
+    });
+  }
+  layoutVehicles();
+}
+
+// 3 台を「画面内に完全に収まる」配置に並べる。
+// 利用可能領域は上 H*0.38 〜 下 H*0.97（⏱/🏠 と重ならず、画面外にも出ない）。
+// 1 台の高さ h = min(22vmin 相当, (領域高さ / 段数) * 0.98) で再計算し、
+// font-size を各段に合わせる。横向きでは 3 台を左・中央・右に横並びでも OK。
+// 全台で 0 <= top, bottom <= innerHeight が成立するよう、top を cellCenter - h/2 で配置。
+function layoutVehicles() {
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const isLandscape = W >= H;
+  const slotCount = runningVehicles.length;
+
+  // 利用可能領域：上 H*0.38 〜 下 H*0.97
+  const regionTop = H * 0.38;
+  const regionBottom = H * 0.97;
+  const regionHeight = regionBottom - regionTop;
+
+  // font-size の基準値（22vmin = 短辺の 22%）
+  const baseFontSize = Math.min(W, H) * 0.22;
+
+  if (isLandscape) {
+    // 横向き：3 台を「左・中央・右」に横 1 列で配置（同じ高さ）
+    // 1 行の上限 = regionHeight * 0.92（行内に上下 4% ずつの余白）
+    const cellSize = Math.min(baseFontSize, regionHeight * 0.92);
+    const centerY = regionTop + regionHeight / 2;
+    const slotXs = [W * 0.25, W * 0.5, W * 0.75];
+    for (let i = 0; i < slotCount; i++) {
+      const v = runningVehicles[i];
+      v.slotX = slotXs[i];
+      const topY = centerY - cellSize / 2;
+      v.el.style.top = topY + "px";
+      v.el.style.fontSize = cellSize + "px";
+      if (v.runState === "idle") {
+        v.x = v.slotX;
+        v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(1)`;
+      }
+      // running/returning 中の v.x は tick が補間中で触らない（戻り先の slotX だけ更新）
+    }
+  } else {
+    // 縦向き：3 台を 3 段に縦並び（中央に配置）
+    // 各段 = regionHeight / slotCount、その 0.97 倍を font-size 上限に
+    const slotHeight = regionHeight / slotCount;
+    const cellSize = Math.min(baseFontSize, slotHeight * 0.97);
+    for (let i = 0; i < slotCount; i++) {
+      const v = runningVehicles[i];
+      v.slotX = W * 0.5;
+      const cellCenterY = regionTop + slotHeight * (i + 0.5);
+      const topY = cellCenterY - cellSize / 2;
+      v.el.style.top = topY + "px";
+      v.el.style.fontSize = cellSize + "px";
+      if (v.runState === "idle") {
+        v.x = v.slotX;
+        v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(1)`;
+      }
+      // running/returning 中の v.x は tick が補間中で触らない（戻り先の slotX だけ更新）
+    }
+  }
+}
+
+// 雲を 2〜3 個、空の上側（0%〜40%）に静的配置。resize でも崩れないように % で置く。
+function buildClouds() {
+  const stage = document.getElementById("stage-vehicle");
+  if (!stage) return;
+  // 既存の雲を除去（initVehicle 複数回呼び出し対応）
+  stage.querySelectorAll(".cloud").forEach(c => c.remove());
+  // 雲の絵文字サイズは短辺の 13% 程度
+  const cloudSize = Math.min(window.innerWidth, window.innerHeight) * 0.13;
+  const positions = [
+    { l: 12, t:  8 },   // 左上
+    { l: 68, t: 20 },   // 右上
+    { l: 42, t: 34 },   // 中央やや上
+  ];
+  for (const p of positions) {
+    const el = document.createElement("div");
+    el.className = "cloud";
+    el.textContent = "☁️";
+    el.style.left = p.l + "%";
+    el.style.top  = p.t + "%";
+    el.style.fontSize = cloudSize + "px";
+    stage.appendChild(el);
+  }
+}
+
+function startVehicleRun(v) {
+  const W = window.innerWidth;
+  // 画面外への距離で左右どちらへ走るか決める
+  const distRight = W - v.x;
+  const distLeft  = v.x;
+  const goRight = distRight >= distLeft;
+  v.dir = goRight ? 1 : -1;
+  v.t0 = performance.now();
+  v.dur = 1.0 + Math.random() * 0.4;
+  v.runState = "running";
+  v.fromX = v.x;
+  v.toX = goRight ? (W + W * 0.2) : (-W * 0.2);
+  // 絵文字反転（左向きへ走るときは左右反転）
+  v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(${v.dir})`;
+}
+
+function tickVehicleRuns(now) {
+  const W = window.innerWidth;
+  for (let i = 0; i < runningVehicles.length; i++) {
+    const v = runningVehicles[i];
+    if (v.runState === "running") {
+      const t = (now - v.t0) / 1000;
+      const u = Math.min(1, t / v.dur);
+      // ease-in-out
+      const e = u < 0.5 ? 2*u*u : 1 - Math.pow(-2*u + 2, 2) / 2;
+      v.x = v.fromX + (v.toX - v.fromX) * e;
+      v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(${v.dir})`;
+      if (u >= 1) {
+        // 反対側から「待機位置」へ戻るアニメーション
+        v.runState = "returning";
+        v.t0 = now;
+        v.dur = 1.6 + Math.random() * 0.6;
+        if (v.dir > 0) {
+          v.fromX = -W * 0.2;
+          v.toX   = v.slotX;
+        } else {
+          v.fromX = W + W * 0.2;
+          v.toX   = v.slotX;
+        }
+      }
+    } else if (v.runState === "returning") {
+      const t = (now - v.t0) / 1000;
+      const u = Math.min(1, t / v.dur);
+      const e = u < 0.5 ? 2*u*u : 1 - Math.pow(-2*u + 2, 2) / 2;
+      v.x = v.fromX + (v.toX - v.fromX) * e;
+      v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(${v.dir})`;
+      if (u >= 1) {
+        v.runState = "idle";
+        // 戻ってきたら別の種類へ入れ替えて飽きにくくする
+        v.kind = pickRandomVehicleKind();
+        v.el.textContent = SoundKit.vehicles[v.kind].emo;
+        v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(1)`;
+      }
+    }
+  }
+}
+
+function loopVehicles() {
+  function frame(now) {
+    // モード離脱時: rAF を null に戻し、ホーム→再入場時に loopVehicles() を再起動させる
+    if (currentMode !== "vehicle") {
+      vehicleRunRaf = null;
+      return;
+    }
+    tickVehicleRuns(now);
+    vehicleRunRaf = requestAnimationFrame(frame);
+  }
+  vehicleRunRaf = requestAnimationFrame(frame);
+}
+
+function initVehicle() {
+  buildVehicles();
+  buildClouds();
+  particles.length = 0;
+  // 既存の rAF を必ずキャンセルしてから常にループ開始（2 回目以降の入場でもアニメが走る）
+  if (vehicleRunRaf != null) {
+    cancelAnimationFrame(vehicleRunRaf);
+    vehicleRunRaf = null;
+  }
+  loopVehicles();
+}
+
+function setupVehicleTap() {
+  const host = document.getElementById("vehicle-area");
+  if (!host) return;
+  buildVehicles();
+  bindResize(layoutVehicles);
+
+  function onDown(e) {
+    e.preventDefault();
+    if (isPalmTouch(e)) return;
+    SoundKit.unlock();
+    tryFullscreen();
+    // タップされた DOM が vehicle か判定（祖先方向にたどる）
+    let node = e.target;
+    while (node && node !== host) {
+      if (node.classList && node.classList.contains("vehicle")) {
+        const idx = runningVehicles.findIndex(v => v.el === node);
+        if (idx >= 0) {
+          const v = runningVehicles[idx];
+          // 走行中でも走行中でも、音は鳴らして走行はリスタート
+          SoundKit.playVehicleSound(v.kind);
+          startVehicleRun(v);
+        }
+        return;
+      }
+      node = node.parentNode;
+    }
+    // どの vehicle でもない場所をタップ:
+    // #vehicle-area は pointer-events:none なのでここに到達することはない (死に分岐)。
+    // 以前はここで SoundKit.playTwinkle() を呼んでいたが、常に未達だったので削除した。
+  }
+  host.addEventListener("pointerdown", onDown, {passive:false});
+  host.addEventListener("click", e => e.preventDefault());
+}
+
+/* =====================================================================
    ホーム：カードでモード切替
    ===================================================================== */
 function setupHomeCards() {
@@ -1674,7 +2280,7 @@ function setupHomeCards() {
       showMode(card.dataset.mode);
     });
     // 絵文字だけ表示（対象児が読める文字なし）
-    const map = { animal:"🐶", balloon:"🎈", color:"🎨" };
+    const map = { animal:"🐶", balloon:"🎈", color:"🎨", music:"🎹", vehicle:"🚗" };
     card.textContent = map[card.dataset.mode] || "•";
   });
 }
@@ -1703,6 +2309,8 @@ function start() {
   setupAnimalTap();
   setupBalloonTap();
   setupColorTap();
+  setupMusicTap();
+  setupVehicleTap();
   setupFinishStage();
   // タブが裏に行ったときは時間計測を止める
   document.addEventListener("visibilitychange", () => {
