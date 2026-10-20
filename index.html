@@ -1,0 +1,1738 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ぽんぽん">
+<meta name="theme-color" content="#1a1a2e">
+<link rel="icon" href="data:,">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<title>ぽんぽんあそび</title>
+<style>
+  /* ===== レイアウト共通 ===== */
+  :root {
+    --h-pad: env(safe-area-inset-top, 0px);
+    --b-pad: env(safe-area-inset-bottom, 0px);
+  }
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #1a1a2e;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    overscroll-behavior: none;
+    touch-action: none;
+  }
+  body { position: fixed; inset: 0; }
+
+  /* ステージ：モード切替で表示/非表示 */
+  .stage {
+    position: absolute; inset: 0;
+    display: none;
+    overflow: hidden;
+  }
+  .stage.active { display: block; }
+
+  /* ===== ホーム ===== */
+  #stage-home {
+    background: linear-gradient(180deg, #ffd6e8 0%, #c1f0ff 100%);
+  }
+  #stage-home .wrap {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 4vh;
+    padding: env(safe-area-inset-top, 0) 5vw env(safe-area-inset-bottom, 0);
+  }
+  .home-card {
+    /* 縦持ち：正方形カード。
+       1 辺 = min(40vmin, (100vh - 余白12vh)/3 - gap4vh) とし、
+       縦 834/1194/1376 で 3 枚が 🏠⏱ と重ならず画面内に収まるようにする。
+       絵文字はカード 1 辺の 55%（40vmin × 0.55 ≒ 22vmin） */
+    width: min(40vmin, calc((100vh - 12vh) / 3 - 4vh));
+    max-width: none;
+    min-height: 72px;
+    aspect-ratio: 1 / 1;
+    border: 0;
+    border-radius: 28px;
+    background: #fff;
+    box-shadow: 0 6px 0 rgba(0,0,0,.12);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22vmin;
+    line-height: 1;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    transition: transform .12s ease;
+  }
+  .home-card:active { transform: scale(.96); }
+
+  /* 横持ち：3 枚を正方形で横並びに。
+     1 辺 30vmin、絵文字はその 57% ≒ 17vmin。
+     3 枚 + gap 2 つ = 96vmin < 短辺 100vmin に収まる */
+  @media (orientation: landscape) {
+    #stage-home .wrap { flex-direction: row; gap: 3vmin; }
+    .home-card {
+      width: 30vmin;
+      font-size: 17vmin;
+    }
+  }
+
+  /* ===== 共通ヘッダー（🏠ボタン） ===== */
+  .home-btn {
+    position: absolute;
+    top: max(24px, env(safe-area-inset-top, 0px));
+    left: max(24px, env(safe-area-inset-left, 0px));
+    width: clamp(72px, 11vmin, 120px);
+    height: clamp(72px, 11vmin, 120px);
+    border-radius: 50%;
+    background: rgba(255,255,255,.85);
+    border: 0;
+    font-size: clamp(28px, 5vmin, 48px);
+    line-height: 1;
+    text-align: center;
+    z-index: 30;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .home-btn canvas {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;     /* 進捗リングは描画のみ */
+  }
+  .home-btn.locked { background: rgba(255,200,200,.95); }
+
+  /* 🏠長押し判定中：他要素のタップを抑止（誤操作対策）
+     ⏱(.timer-btn)も除外：短いクリックで ⏱ に pointer-events:none が当たり、
+     pointerup がボタンに届かず cancelHold が呼ばれない問題を避けるため */
+  body.home-locking .stage > *:not(.home-btn):not(.timer-btn) { pointer-events: none; }
+
+  /* ===== モード共通キャンバス ===== */
+  .mode-canvas {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    z-index: 5;
+    touch-action: none;
+  }
+
+  /* ===== どうぶつ ===== */
+  #stage-animal {
+    background: linear-gradient(180deg, #fff7d6 0%, #ffe7c1 100%);
+  }
+  #animal-stage {
+    position: absolute;
+    left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+    z-index: 10;
+    will-change: transform;
+  }
+  #animal-emoji {
+    font-size: 60vmin;   /* 短辺の 6 割相当 */
+    line-height: 1;
+    transform-origin: center center;
+    will-change: transform;
+    pointer-events: auto;
+    touch-action: none;
+  }
+
+  /* ===== ふうせん ===== */
+  #stage-balloon {
+    background: linear-gradient(180deg, #bde0fe 0%, #a2d2ff 100%);
+  }
+
+  /* ===== いろ ===== */
+  #stage-color {
+    background: #0b1020;
+  }
+
+  /* ===== タイマー設定（親用：ホーム右上の小さな⏱） ===== */
+  .timer-btn {
+    position: absolute;
+    top: max(24px, env(safe-area-inset-top, 0px));
+    right: max(24px, env(safe-area-inset-right, 0px));
+    width: clamp(72px, 11vmin, 120px);
+    height: clamp(72px, 11vmin, 120px);
+    border-radius: 50%;
+    background: rgba(255,255,255,.45);          /* 半透明で目立たせない */
+    border: 0;
+    font-size: clamp(28px, 5vmin, 48px);
+    line-height: 1;
+    text-align: center;
+    z-index: 30;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .timer-btn canvas {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;                      /* 進捗リングは描画のみ */
+  }
+  .timer-btn.locked { background: rgba(255,200,200,.75); }
+  .timer-status {
+    position: absolute;
+    /* 🏠/⏱ ボタン直下に配置（ボタン 11vmin + 余白 12px + safe-area） */
+    top: calc(max(24px, env(safe-area-inset-top, 0px)) + clamp(72px, 11vmin, 120px) + 12px);
+    right: max(24px, env(safe-area-inset-right, 0px));
+    width: clamp(68px, 12vmin, 120px);
+    text-align: center;
+    font-size: clamp(13px, 2.2vmin, 22px);
+    font-weight: 700;
+    color: rgba(80, 50, 90, 0.75);
+    letter-spacing: 0.5px;
+    z-index: 30;
+    pointer-events: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* ===== おしまい画面 ===== */
+  #stage-finish {
+    background: radial-gradient(ellipse at 50% 35%, #2a2a55 0%, #14142b 70%, #06061a 100%);
+  }
+  #stage-finish > *:not(.home-btn) { pointer-events: none; }   /* 子のタップには反応しない */
+  .finish-moon {
+    position: absolute;
+    left: 50%; top: 48%;
+    transform: translate(-50%, -50%);
+    font-size: 32vmin;
+    line-height: 1;
+    opacity: 0.95;
+    user-select: none;
+  }
+  .finish-stars {
+    position: absolute; inset: 0;
+  }
+  .finish-stars span {
+    position: absolute;
+    color: #fff8c2;
+    opacity: 0.85;
+    font-size: clamp(14px, 2.8vmin, 24px);
+    line-height: 1;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* ===== フェード（おしまいの遷移用） ===== */
+  /* フェードインを効かせるには transition を常時付けておく（fading を外した瞬間に 1s で戻る） */
+  body { transition: opacity 1s ease; }
+  body.fading {
+    opacity: 0;
+    pointer-events: none;                      /* フェード中はタップ抑止 */
+  }
+</style>
+</head>
+<body>
+
+<!-- ========= ホーム ========= -->
+<section id="stage-home" class="stage active">
+  <button id="timer-btn" class="timer-btn" aria-label="タイマー設定"><canvas></canvas>⏱</button>
+  <div id="timer-status" class="timer-status"></div>
+  <div class="wrap">
+    <button class="home-card" data-mode="animal" aria-label="どうぶつ"></button>
+    <button class="home-card" data-mode="balloon" aria-label="ふうせん"></button>
+    <button class="home-card" data-mode="color" aria-label="いろ"></button>
+  </div>
+</section>
+
+<!-- ========= どうぶつ ========= -->
+<section id="stage-animal" class="stage">
+  <button class="home-btn" aria-label="ホームへ"><canvas></canvas>🏠</button>
+  <div id="animal-stage">
+    <div id="animal-emoji"></div>
+  </div>
+  <canvas class="mode-canvas" id="animal-canvas"></canvas>
+</section>
+
+<!-- ========= ふうせん ========= -->
+<section id="stage-balloon" class="stage">
+  <button class="home-btn" aria-label="ホームへ"><canvas></canvas>🏠</button>
+  <canvas class="mode-canvas" id="balloon-canvas"></canvas>
+</section>
+
+<!-- ========= いろ ========= -->
+<section id="stage-color" class="stage">
+  <button class="home-btn" aria-label="ホームへ"><canvas></canvas>🏠</button>
+  <canvas class="mode-canvas" id="color-canvas"></canvas>
+</section>
+
+<!-- ========= おしまい ========= -->
+<section id="stage-finish" class="stage">
+  <button class="home-btn" aria-label="ホームへ"><canvas></canvas>🏠</button>
+  <div class="finish-stars" id="finish-stars"></div>
+  <div class="finish-moon">🌙</div>
+</section>
+
+<script>
+"use strict";
+
+/* =====================================================================
+   baby-tap : 1歳8か月向けタップ知育ゲーム
+   - 外部ライブラリ/画像/通信なし、絵は絵文字+Canvas
+   - WebAudioで効果音合成、speechSynthesisで日本語読み上げ
+   - ピンチ/ダブルタップ/コンテキストメニュー/スクロール抑止
+   ===================================================================== */
+
+/* ---- 抑止：拡大・コンテキストメニュー・選択など ---- */
+["gesturestart","gesturechange","gestureend"].forEach(ev =>
+  document.addEventListener(ev, e => e.preventDefault(), {passive:false})
+);
+document.addEventListener("contextmenu", e => e.preventDefault());
+document.addEventListener("dblclick",     e => e.preventDefault());
+document.addEventListener("selectstart",  e => e.preventDefault());
+document.addEventListener("dragstart",    e => e.preventDefault());
+window.addEventListener("touchmove", e => {
+  // 1本指のときも 2 本指のときも既定動作を抑止
+  if (e.touches && e.touches.length >= 1) e.preventDefault();
+}, {passive:false});
+
+/* =====================================================================
+   音声レイヤ (WebAudio + speechSynthesis)
+   ===================================================================== */
+const SoundKit = (() => {
+  let ctx = null;
+  let master = null;
+  let unlocked = false;
+  // 同時発音数の上限。超えたら新しい発音を捨てる（古い方を奪わない）。
+  let voiceCount = 0;
+  const MAX_VOICES = 8;
+
+  function ensure() {
+    if (ctx) return ctx;
+    try {
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      ctx = new Ctor();
+      master = ctx.createGain();
+      master.gain.value = 0.22;   // gain 0.25 以下、乳幼児配慮
+      master.connect(ctx.destination);
+    } catch (err) {
+      // 端末非対応：握り潰さずコメントだけ残す
+      console.warn("[audio] AudioContext unavailable:", err);
+      ctx = null;
+    }
+    return ctx;
+  }
+  // iOS の "interrupted" も resume を試みる。state を見て呼び分ける。
+  function tryResume() {
+    if (!ctx) return;
+    if (ctx.state !== "running") {
+      ctx.resume().catch(err => console.warn("[audio] resume failed:", err));
+    }
+  }
+  function unlock() {
+    ensure();
+    tryResume();
+    // iOS: ユーザー操作の同期処理内で無音バッファを start(0) してアンロックする。
+    // ctx.resume() は非同期なので最初のタップ時点では state がまだ "running" でないことが多い。
+    // state を待たずに同期的に start() を呼べば、start は resume 完了後にキューから再生される。
+    // iOS で「最初のユーザー操作内に AudioContext 起点の音を鳴らす」のは確実なアンロック手段。
+    if (ctx && !unlocked) {
+      try {
+        const buf = ctx.createBuffer(1, Math.max(1, Math.floor(ctx.sampleRate * 0.1)), ctx.sampleRate);
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(ctx.destination);
+        src.start(0);
+        // 無音バッファの start を呼んだ後でのみ unlocked=true にする
+        // （start が失敗した場合はフラグを立てない＝次回タップで再試行）
+        unlocked = true;
+      } catch (err) { /* ignore */ }
+    }
+    // TTS プライミング（iOS は最初の speak がユーザー操作の同期処理内でないと無音）
+    // 未定義でも try/catch で握り潰す（定義は SoundKit の外）
+    try { primeTTS(); } catch (_) { /* not defined */ }
+  }
+  // 同時発音の管理。true で発音可、false でスキップ。
+  function acquireVoice(durMs) {
+    if (voiceCount >= MAX_VOICES) return false;
+    voiceCount++;
+    if (durMs > 0) setTimeout(releaseVoice, durMs);
+    return true;
+  }
+  function releaseVoice() { voiceCount = Math.max(0, voiceCount - 1); }
+
+  /* --------------- ユーティリティ --------------- */
+  function envOsc(o, t0, dur, peak, attack, release) {
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0001), t0 + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g).connect(master);
+    o.start(t0);
+    o.stop(t0 + dur + release + 0.02);
+  }
+
+  /* --------------- 鳴き声 --------------- */
+  // いぬ：わんわん = 矩形波の短いパルス 2 発を低め
+  function bark() {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    [0, 0.18].forEach(off => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "square";
+      o.frequency.setValueAtTime(380, now + off);
+      o.frequency.exponentialRampToValueAtTime(260, now + off + 0.12);
+      g.gain.setValueAtTime(0.0001, now + off);
+      g.gain.exponentialRampToValueAtTime(0.22, now + off + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + off + 0.12);
+      o.connect(g).connect(master);
+      o.start(now + off);
+      o.stop(now + off + 0.16);
+    });
+  }
+  // ねこ：にゃーにゃー = サイン波のポルタメント+ビブラート
+  function meow() {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = "sine";
+    o.frequency.setValueAtTime(620, now);
+    o.frequency.exponentialRampToValueAtTime(900, now + 0.18);
+    o.frequency.exponentialRampToValueAtTime(720, now + 0.55);
+    const lfo = ctx.createOscillator();
+    const lfoG = ctx.createGain();
+    lfo.frequency.value = 9;
+    lfoG.gain.value = 40;
+    lfo.connect(lfoG).connect(o.frequency);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.22, now + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+    o.connect(g).connect(master);
+    o.start(now); o.stop(now + 0.6);
+    lfo.start(now); lfo.stop(now + 0.6);
+  }
+  // うし：もーもー = 低いサイン波+ビブラート
+  function moo() {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = "sawtooth";
+    o.frequency.value = 150;
+    const lfo = ctx.createOscillator();
+    const lfoG = ctx.createGain();
+    lfo.frequency.value = 4.5;
+    lfoG.gain.value = 6;
+    lfo.connect(lfoG).connect(o.frequency);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.22, now + 0.15);
+    g.gain.setValueAtTime(0.22, now + 0.7);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 1.0);
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 700;
+    o.connect(lp).connect(g).connect(master);
+    o.start(now); o.stop(now + 1.05);
+    lfo.start(now); lfo.stop(now + 1.05);
+  }
+  // ぶた：ぶーぶー = のこぎり波にローパス
+  function oink() {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    [0, 0.25].forEach(off => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      const lp = ctx.createBiquadFilter();
+      o.type = "sawtooth";
+      o.frequency.setValueAtTime(180, now + off);
+      o.frequency.exponentialRampToValueAtTime(120, now + off + 0.3);
+      lp.type = "lowpass"; lp.frequency.value = 600;
+      g.gain.setValueAtTime(0.0001, now + off);
+      g.gain.exponentialRampToValueAtTime(0.20, now + off + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + off + 0.32);
+      o.connect(lp).connect(g).connect(master);
+      o.start(now + off); o.stop(now + off + 0.36);
+    });
+  }
+  // にわとり：こけこっこー = 高めの矩形波 2 音
+  function cluck() {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const seq = [
+      {t:0.00, f:880,  d:0.10},
+      {t:0.16, f:1100, d:0.18},
+      {t:0.40, f:880,  d:0.12},
+    ];
+    seq.forEach(s => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "square";
+      o.frequency.value = s.f;
+      g.gain.setValueAtTime(0.0001, now + s.t);
+      g.gain.exponentialRampToValueAtTime(0.10, now + s.t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + s.t + s.d);
+      o.connect(g).connect(master);
+      o.start(now + s.t); o.stop(now + s.t + s.d + 0.02);
+    });
+  }
+  // ひつじ：めーめー = 振幅変調サイン
+  function baa() {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = "sine";
+    o.frequency.setValueAtTime(420, now);
+    o.frequency.linearRampToValueAtTime(380, now + 0.4);
+    const lfo = ctx.createOscillator();
+    const lfoG = ctx.createGain();
+    lfo.type = "sine"; lfo.frequency.value = 11;
+    lfoG.gain.value = 0.12;
+    lfo.connect(lfoG).connect(g.gain);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.22, now + 0.04);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+    o.connect(g).connect(master);
+    o.start(now); o.stop(now + 0.5);
+    lfo.start(now); lfo.stop(now + 0.5);
+  }
+  // うま：ひひーん = サイン波のポルタメント
+  function neigh() {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = "sine";
+    o.frequency.setValueAtTime(380, now);
+    o.frequency.exponentialRampToValueAtTime(820, now + 0.22);
+    o.frequency.exponentialRampToValueAtTime(620, now + 0.45);
+    o.frequency.exponentialRampToValueAtTime(760, now + 0.65);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.22, now + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.7);
+    o.connect(g).connect(master);
+    o.start(now); o.stop(now + 0.75);
+  }
+  // かえる：げろげろ = サイン波のポルタメント（下→上→下）
+  function croak() {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    [0, 0.20, 0.50, 0.70].forEach((off, i) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.frequency.setValueAtTime(140, now + off);
+      o.frequency.exponentialRampToValueAtTime(260, now + off + 0.06);
+      o.frequency.exponentialRampToValueAtTime(180, now + off + 0.14);
+      g.gain.setValueAtTime(0.0001, now + off);
+      g.gain.exponentialRampToValueAtTime(0.18, now + off + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + off + 0.14);
+      o.connect(g).connect(master);
+      o.start(now + off); o.stop(now + off + 0.18);
+    });
+  }
+  // あひる：がーがー = 矩形波 2 音（高め、下降）
+  function quack() {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    [0, 0.16].forEach(off => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      const lp = ctx.createBiquadFilter();
+      o.type = "square";
+      o.frequency.setValueAtTime(520, now + off);
+      o.frequency.exponentialRampToValueAtTime(280, now + off + 0.10);
+      lp.type = "lowpass"; lp.frequency.value = 1400;
+      g.gain.setValueAtTime(0.0001, now + off);
+      g.gain.exponentialRampToValueAtTime(0.18, now + off + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + off + 0.12);
+      o.connect(lp).connect(g).connect(master);
+      o.start(now + off); o.stop(now + off + 0.16);
+    });
+  }
+  // らいおん：がおー = 低音+ローパス+ビブラート
+  function roar() {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = "sawtooth";
+    o.frequency.setValueAtTime(110, now);
+    o.frequency.exponentialRampToValueAtTime(75, now + 0.6);
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 420;
+    const lfo = ctx.createOscillator();
+    const lfoG = ctx.createGain();
+    lfo.type = "sine"; lfo.frequency.value = 7;
+    lfoG.gain.value = 5;
+    lfo.connect(lfoG).connect(o.frequency);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.24, now + 0.1);
+    g.gain.setValueAtTime(0.24, now + 0.5);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.85);
+    o.connect(lp).connect(g).connect(master);
+    o.start(now); o.stop(now + 0.9);
+    lfo.start(now); lfo.stop(now + 0.9);
+  }
+
+  /* --------------- 効果音 --------------- */
+  // おしまい音：下降する3音の鈴（最大 gain 0.20、master 0.22 通過後に 0.044）
+  function finishTone() {
+    if (!ctx || !acquireVoice(500)) return;
+    const now = ctx.currentTime;
+    // 880 → 698 → 523（A5 → F5 → C5）三角波、各 0.18s 間隔
+    [880, 698, 523].forEach((f, i) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "triangle";
+      o.frequency.value = f;
+      const t0 = now + i * 0.18;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.20, t0 + 0.02);  // 単音ピーク 0.20 ≦ 0.25
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.32);
+      o.connect(g).connect(master);
+      o.start(t0); o.stop(t0 + 0.36);
+    });
+  }
+  // 破裂音（風船）
+  function pop() {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 0.25, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      const t = i / data.length;
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, 3) * 0.9;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const lp = ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(2200, now);
+    lp.frequency.exponentialRampToValueAtTime(400, now + 0.20);
+    const g = ctx.createGain();
+    g.gain.value = 0.30;
+    src.connect(lp).connect(g).connect(master);
+    src.start(now); src.stop(now + 0.25);
+  }
+  // きらきら（高めのベル）
+  function twinkle() {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    [1200, 1500, 1800].forEach((f, i) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "triangle";
+      o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, now + i * 0.04);
+      g.gain.exponentialRampToValueAtTime(0.12, now + i * 0.04 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.04 + 0.18);
+      o.connect(g).connect(master);
+      o.start(now + i * 0.04); o.stop(now + i * 0.04 + 0.22);
+    });
+  }
+
+  /* --------------- 鳴き声テーブル --------------- */
+  // 絵文字 / 鳴き声 / 読み上げテキスト
+  const animals = [
+    {emo:"🐶", sound:"わんわん",       read:"わんわん",       fn: bark  },
+    {emo:"🐱", sound:"にゃーにゃー",   read:"にゃーにゃー",   fn: meow  },
+    {emo:"🐮", sound:"もーもー",       read:"もーもー",       fn: moo   },
+    {emo:"🐷", sound:"ぶーぶー",       read:"ぶーぶー",       fn: oink  },
+    {emo:"🐔", sound:"こけこっこー",   read:"こけこっこー",   fn: cluck },
+    {emo:"🐑", sound:"めーめー",       read:"めーめー",       fn: baa   },
+    {emo:"🐴", sound:"ひひーん",       read:"ひひーん",       fn: neigh },
+    {emo:"🐸", sound:"げろげろ",       read:"げろげろ",       fn: croak },
+    {emo:"🦆", sound:"がーがー",       read:"がーがー",       fn: quack },
+    {emo:"🦁", sound:"がおー",         read:"がおー",         fn: roar  },
+  ];
+
+  function playAnimal(idx) {
+    const a = animals[idx];
+    if (!a) return;
+    // 鳴き声の最長は roar ≒ 0.9s、余裕を 1.2s にする
+    // acquireVoice 内の setTimeout が自動で解放するので、手動の releaseVoice は呼ばない
+    if (!acquireVoice(1200)) return;
+    a.fn();                                  // 合成音（即時）
+    setTimeout(() => safeSpeak(a.read), 250); // 読み上げを 250ms 遅らせ、合成音と被せる
+  }
+  function playPop()  {
+    // acquireVoice 内の setTimeout が自動で解放する（二重解放しない）
+    if (!acquireVoice(300)) return;
+    pop();
+  }
+  function playTwinkle() {
+    // playTwinkle が発音の入口、ここ 1 回だけ acquire。twinkle() 内部では acquire しない
+    if (!acquireVoice(300)) return;
+    twinkle();
+  }
+
+  /* --------------- カラー：ペンタトニック (C4 D4 E4 G4 A4) --------------- */
+  // x 座標 [0..1] を 5 区分
+  const scale = [261.63, 293.66, 329.63, 392.00, 440.00];
+  function noteForX(xNorm) {
+    const n = Math.max(0, Math.min(scale.length - 1, Math.floor(xNorm * scale.length)));
+    return scale[n];
+  }
+  function playNote(freq, dur = 0.35, gain = 0.22) {
+    if (!ctx) return;
+    // 倍音(o2)含めて 1 note = 1 voice として数える（発音の入口で 1 回だけ acquire）
+    // 解放は acquireVoice 内の setTimeout に任せる（手動で releaseVoice を呼ばない）
+    if (!acquireVoice(Math.ceil((dur + 0.3) * 1000))) return;
+    const o = ctx.createOscillator();
+    o.type = "triangle";
+    o.frequency.value = freq;
+    envOsc(o, ctx.currentTime, dur, gain, 0.01, 0.06);
+    // 倍音を薄く重ねて柔らかく
+    const o2 = ctx.createOscillator();
+    o2.type = "sine";
+    o2.frequency.value = freq * 2;
+    envOsc(o2, ctx.currentTime, dur, gain * 0.4, 0.01, 0.06);
+  }
+  function playNoteSmall(freq) {
+    playNote(freq, 0.18, 0.16);
+  }
+
+  return {
+    unlock, tryResume,
+    playAnimal, playPop, playTwinkle, finishTone,
+    noteForX, playNote, playNoteSmall,
+    animals,
+  };
+})();
+
+/* =====================================================================
+   読み上げ (speechSynthesis)
+   - ja-JP、rate 0.8、pitch 1.5
+   - 失敗しても握り潰さず無音で続行
+   - 日本語音声は getVoices() が非同期で来るので voiceschanged で再取得
+   - iOS は最初の speak がユーザー操作の同期処理内でないと無音 → 初回タップで
+     volume 0 の空の発話 (" ") でプライミング
+   ===================================================================== */
+let jaVoice = null;
+let ttsPrimed = false;
+function pickJapaneseVoice() {
+  if (!("speechSynthesis" in window)) return;
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices || !voices.length) return;
+  jaVoice =
+    voices.find(v => v.lang === "ja-JP") ||
+    voices.find(v => v.lang && v.lang.toLowerCase().startsWith("ja")) ||
+    null;
+}
+if ("speechSynthesis" in window) {
+  pickJapaneseVoice();
+  // voiceschanged は iOS / Chrome で非同期に発火する
+  window.speechSynthesis.onvoiceschanged = pickJapaneseVoice;
+}
+function primeTTS() {
+  if (ttsPrimed) return;
+  if (!("speechSynthesis" in window)) return;
+  try {
+    const u = new SpeechSynthesisUtterance(" ");
+    u.volume = 0;
+    u.lang = "ja-JP";
+    if (jaVoice) u.voice = jaVoice;
+    window.speechSynthesis.speak(u);
+    ttsPrimed = true;
+  } catch (err) { /* ignore */ }
+}
+function safeSpeak(text) {
+  try {
+    if (!("speechSynthesis" in window)) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "ja-JP";
+    u.rate = 0.8;
+    u.pitch = 1.5;
+    u.volume = 0.7;                          // 合成音(0.05 前後)より大きくしすぎない
+    if (jaVoice) u.voice = jaVoice;
+    // 古い読みが残っていると遅れるので、毎回キャンセルしてから投入
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  } catch (err) {
+    // 例外はコメントだけ残して握り潰す（無音で続行）
+    console.warn("[tts] failed:", err);
+  }
+}
+
+/* =====================================================================
+   手のひら判定（1歳児が手のひら全体でタップするのを無視）
+   - touch かつ width / height が両方 60px を超える接触を無視
+   - 値が取れない環境（0 や undefined）では無視しない（=通常タップとして扱う）
+   ===================================================================== */
+const PALM_THRESHOLD = 60;
+function isPalmTouch(e) {
+  if (!e || e.pointerType !== "touch") return false;
+  const w = e.width, h = e.height;
+  // 環境依存で取れない時は無視せず通す
+  if (w == null || h == null) return false;
+  if (w <= 0 || h <= 0) return false;
+  return w > PALM_THRESHOLD && h > PALM_THRESHOLD;
+}
+
+/* =====================================================================
+   パーティクル共通
+   ===================================================================== */
+function spawnParticles(x, y, color, count = 24) {
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 60 + Math.random() * 220;
+    particles.push({
+      x, y,
+      vx: Math.cos(a) * sp,
+      vy: Math.sin(a) * sp - 80,
+      life: 0,
+      ttl: 0.9 + Math.random() * 0.6,   // 0.9〜1.5 秒
+      // 短辺の 0.8〜1.4 vmin（描画時に vminUnit を掛ける）
+      size: 0.8 + Math.random() * 0.6,
+      color,
+    });
+  }
+}
+const particles = [];
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life += dt;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 320 * dt;     // 重力
+    p.vx *= 0.985;
+    if (p.life >= p.ttl) particles.splice(i, 1);
+  }
+}
+function drawParticles(ctx2d) {
+  // 短辺の 1/100 = 1vmin。resize / orientationchange に追従する
+  const u = Math.min(window.innerWidth, window.innerHeight) / 100;
+  ctx2d.save();
+  for (const p of particles) {
+    const a = 1 - p.life / p.ttl;
+    ctx2d.globalAlpha = Math.max(0, a);
+    ctx2d.fillStyle = p.color;
+    ctx2d.beginPath();
+    ctx2d.arc(p.x, p.y, p.size * u, 0, Math.PI * 2);
+    ctx2d.fill();
+  }
+  ctx2d.restore();
+}
+
+/* =====================================================================
+   タイマー設定（親用：ホーム右上の⏱ボタン）
+   - 値: 0=なし, 5, 10, 15, 20 (分)
+   - localStorage に保存（キー baby-tap.timerMin）、try/catch で例外を握り潰さない
+   - URL パラメータ ?timersec=N でテスト用に秒数で動作
+   ===================================================================== */
+const TimerConfig = (() => {
+  const KEY = "baby-tap.timerMin";
+  const VALUES = [0, 5, 10, 15, 20];     // 0 = なし
+  let current = 0;
+
+  function getURLSecOverride() {
+    try {
+      const params = new URLSearchParams(location.search);
+      const v = params.get("timersec");
+      if (v == null) return null;
+      const n = parseInt(v, 10);
+      if (!Number.isFinite(n) || n <= 0) return null;
+      return n;
+    } catch (err) {
+      console.warn("[timer] URL parse failed:", err);
+      return null;
+    }
+  }
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw == null) return 0;
+      const n = parseInt(raw, 10);
+      if (!Number.isFinite(n) || !VALUES.includes(n)) return 0;
+      return n;
+    } catch (err) {
+      console.warn("[timer] load failed:", err);
+      return 0;
+    }
+  }
+
+  function save(n) {
+    try {
+      localStorage.setItem(KEY, String(n));
+    } catch (err) {
+      console.warn("[timer] save failed:", err);
+    }
+  }
+
+  function init() {
+    current = load();
+    const sec = getURLSecOverride();
+    if (sec != null) {
+      console.log(`[timer] debug mode: limit = ${sec} sec (URL override)`);
+    } else if (current === 0) {
+      console.log("[timer] disabled (no setting)");
+    } else {
+      console.log(`[timer] limit = ${current} min`);
+    }
+  }
+
+  function get() { return current; }                       // 0,5,10,15,20
+  function getDisplay() { return current === 0 ? "なし" : String(current); }
+  function getLimitMs() {
+    const sec = getURLSecOverride();
+    if (sec != null) return sec * 1000;
+    return current === 0 ? 0 : current * 60 * 1000;
+  }
+  function next() {
+    const i = VALUES.indexOf(current);
+    current = VALUES[(i + 1) % VALUES.length];
+    save(current);
+    return current;
+  }
+
+  return { init, get, getDisplay, getLimitMs, next, getURLSecOverride };
+})();
+
+/* =====================================================================
+   プレイ時間タイマー（モード画面の表示中だけ加算）
+   - ホーム滞在は数えない
+   - visibilitychange で hidden の間は止める
+   - finished=true で重ね打ち防止
+   ===================================================================== */
+const playTimer = {
+  cumulativeMs: 0,           // モード画面に居た時間の合計
+  inModeStartMs: 0,           // 現在のモードに入った時刻（performance.now）
+  pausedAtMs: null,           // 非表示で停止した時刻（null なら停止していない）
+  inMode: false,              // モード画面が表示されているか
+  finished: false,             // おしまいに到達済みか（二重防止）
+  limitMs: 0,                 // 現在の設定値（ミリ秒）
+};
+
+// モード画面に入った（home / finish 以外）
+function onEnterMode(now) {
+  playTimer.inMode = true;
+  playTimer.inModeStartMs = now;
+}
+
+// モード画面から抜けた（累計をコミットメント）
+function onLeaveMode(now) {
+  if (playTimer.inMode) {
+    playTimer.cumulativeMs += now - playTimer.inModeStartMs;
+  }
+  playTimer.inMode = false;
+}
+
+// 現在の累計加算
+function currentElapsedMs(now) {
+  if (playTimer.pausedAtMs != null) {
+    // 一時停止中：cumulativeMs のまま（inModeStartMs は進めてある）
+    return playTimer.cumulativeMs;
+  }
+  if (playTimer.inMode) {
+    return playTimer.cumulativeMs + (now - playTimer.inModeStartMs);
+  }
+  return playTimer.cumulativeMs;
+}
+
+function onVisibilityHidden(now) {
+  // モード画面にいるときだけ停止対象
+  if (playTimer.pausedAtMs == null && playTimer.inMode) {
+    // 停止時点の累計を確定
+    playTimer.cumulativeMs += now - playTimer.inModeStartMs;
+    playTimer.pausedAtMs = now;
+  }
+}
+
+function onVisibilityVisible(now) {
+  if (playTimer.pausedAtMs != null) {
+    // 再開：inModeStartMs を now にして、cumulativeMs に pauseDur を加えない
+    // → 結果として「止まっていた時間ぶん」進まないように見える（仕様に従う）
+    playTimer.inModeStartMs = now;
+    playTimer.pausedAtMs = null;
+  }
+}
+
+function resetCumulative() {
+  const now = performance.now();
+  playTimer.cumulativeMs = 0;
+  playTimer.inModeStartMs = now;
+  playTimer.pausedAtMs = null;
+  // inMode / finished は呼び出し側で制御
+}
+
+function triggerFinish(now) {
+  if (playTimer.finished) return;
+  playTimer.finished = true;
+  // 累計を確定（inMode = false にして加算を止める）
+  if (playTimer.inMode) {
+    playTimer.cumulativeMs += now - playTimer.inModeStartMs;
+  }
+  playTimer.inMode = false;
+  // 終了音 → 読み上げ → フェードでおしまい画面へ
+  SoundKit.finishTone();
+  safeSpeak("おしまい");
+  fadeThenFinish();
+}
+
+/* =====================================================================
+   モード管理
+   ===================================================================== */
+const stages = {
+  home:    document.getElementById("stage-home"),
+  animal:  document.getElementById("stage-animal"),
+  balloon: document.getElementById("stage-balloon"),
+  color:   document.getElementById("stage-color"),
+  finish:  document.getElementById("stage-finish"),
+};
+let currentMode = "home";
+
+// 現在のモードで有効な resize ハンドラ（モード切替時に外す）
+let activeResize = null;
+function bindResize(onResize) {
+  if (activeResize) {
+    window.removeEventListener("resize", activeResize);
+    window.removeEventListener("orientationchange", activeResize);
+  }
+  window.addEventListener("resize", onResize);
+  window.addEventListener("orientationchange", onResize);
+  activeResize = onResize;
+}
+
+function showMode(mode) {
+  const now = performance.now();
+  // 直前モードを保持（累計リセット条件の判定に使う）
+  const previousMode = currentMode;
+  // 前のモードの計測をコミット
+  onLeaveMode(now);
+
+  currentMode = mode;
+  for (const k of Object.keys(stages)) {
+    stages[k].classList.toggle("active", k === mode);
+  }
+  // モード切替時に粒子をクリア（前のモードのきらきらを残さない）
+  particles.length = 0;
+
+  // 累計リセットは「finish → home」のときだけ。
+  // 通常のモード → home では累計を維持（ホーム滞在中は inMode=false なので加算されない）。
+  // ⏱での設定変更時は setupTimerButton 側で別途リセットする。
+  if (mode === "home" && previousMode === "finish") {
+    resetCumulative();
+    playTimer.finished = false;
+  }
+
+  // 表示が反映されてから初期化（clientWidth が 0 のまま resize されるのを防ぐ）
+  requestAnimationFrame(() => {
+    if (mode === "animal")  initAnimal();
+    if (mode === "balloon") initBalloon();
+    if (mode === "color")   initColor();
+    // finish は init 不要（DOM は静的）
+  });
+
+  // 新しいモードが「計測対象」なら開始
+  if (mode === "animal" || mode === "balloon" || mode === "color") {
+    onEnterMode(performance.now());
+  }
+}
+
+/* ---- おしまいに遷移：フェード → ステージ切替 → フェードイン ---- */
+function fadeThenFinish() {
+  document.body.classList.add("fading");
+  setTimeout(() => {
+    showMode("finish");
+    // 次のフレームでフェードイン開始（合計 約2秒のアニメ）
+    requestAnimationFrame(() => {
+      document.body.classList.remove("fading");
+    });
+  }, 1000);
+}
+
+/* =====================================================================
+   長押しボタン共通：1.5 秒長押しで進捗リング
+   - 🏠 と ⏱ の両方で使用（描画色は呼び出し側で指定可）
+   - 既存の setupHomeButtons の中身を移植
+   ===================================================================== */
+function setupHoldButton(btn, onLongPress, opts) {
+  const HOLD_MS = (opts && opts.holdMs)    || 1500;
+  const COLOR   = (opts && opts.ringColor) || "#e34";
+  const cv = btn.querySelector("canvas");
+  // ボタン幅は clamp(72px, 11vmin, 120px) で変動する。毎フレーム clientWidth を見る方式に変える
+  let ctx2d = null;
+  let timer = null;        // setInterval の id（リング再描画用）
+  let holdTimer = null;    // setTimeout の id（HOLD_MS で発火用）
+  let start = 0;
+  let locked = false;
+
+  function rebuildCanvas() {
+    // 現在のボタン幅で canvas を再構築（resize / orientationchange に追従）
+    const cssSize = btn.clientWidth || 72;
+    ctx2d = setupHiDPICanvas(cv, cssSize);
+  }
+  rebuildCanvas();
+  // ボタンサイズが変わったらリング用 canvas も作り直す（Stage Manager / 分割表示対応）
+  if (typeof ResizeObserver !== "undefined") {
+    const ro = new ResizeObserver(() => {
+      rebuildCanvas();
+      if (locked) drawRing();
+    });
+    ro.observe(btn);
+  }
+
+  function drawRing() {
+    if (!ctx2d) return;
+    const w = cv.clientWidth;
+    ctx2d.clearRect(0, 0, cv.width, cv.height);
+    if (!locked) return;
+    const elapsed = performance.now() - start;
+    const t = Math.min(1, elapsed / HOLD_MS);
+    // setupHiDPICanvas で既に scale(dpr,dpr) 済みなので、ここでは再 scale しない
+    ctx2d.save();
+    // 線幅もボタンサイズに比例（vmin ベース）
+    const lineW = Math.max(3, w * 0.08);
+    ctx2d.lineWidth = lineW;
+    ctx2d.strokeStyle = COLOR;
+    ctx2d.beginPath();
+    ctx2d.arc(w/2, w/2, w/2 - lineW, -Math.PI/2, -Math.PI/2 + Math.PI*2*t);
+    ctx2d.stroke();
+    ctx2d.restore();
+  }
+  function startHold() {
+    SoundKit.unlock();
+    tryFullscreen();
+    locked = true;
+    start = performance.now();
+    btn.classList.add("locked");
+    document.body.classList.add("home-locking");   // 他タップ抑止
+    drawRing();
+    timer = setInterval(drawRing, 16);
+    holdTimer = setTimeout(() => {
+      if (locked) {
+        clearInterval(timer);
+        timer = null;
+        document.body.classList.remove("home-locking");
+        // CSS は .home-btn(locked) の背景色を変えているので、ここで解除
+        btn.classList.remove("locked");
+        if (ctx2d) ctx2d.clearRect(0, 0, cv.width, cv.height);
+        onLongPress();
+      }
+    }, HOLD_MS);
+  }
+  function cancelHold() {
+    locked = false;
+    btn.classList.remove("locked");
+    document.body.classList.remove("home-locking");
+    // 離して素早く押し直しても 1.5 秒未満で戻らないよう、両方のタイマーを止める
+    if (timer)     { clearInterval(timer);   timer = null; }
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    if (ctx2d) ctx2d.clearRect(0, 0, cv.width, cv.height);
+  }
+  btn.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    // pointer capture：home-locking でボタン側が pointer-events:none になっても
+    // pointerup / pointercancel / lostpointercapture がボタンに届くようにする
+    try { btn.setPointerCapture(e.pointerId); } catch (_) { /* 取得失敗は無視 */ }
+    startHold();
+  });
+  btn.addEventListener("pointerup",   e => { e.preventDefault(); cancelHold(); });
+  btn.addEventListener("pointercancel",e => cancelHold());
+  // capture が外れた場合（OS が強制的に奪った等）にも確実にキャンセル
+  btn.addEventListener("lostpointercapture", () => cancelHold());
+  btn.addEventListener("pointermove", e => {
+    // 指がボタン外に出たらキャンセル
+    const r = btn.getBoundingClientRect();
+    const x = e.clientX, y = e.clientY;
+    if (x < r.left || x > r.right || y < r.top || y > r.bottom) cancelHold();
+  });
+  btn.addEventListener("click", e => e.preventDefault());
+}
+
+function setupHomeButtons() {
+  document.querySelectorAll(".home-btn").forEach(btn => {
+    setupHoldButton(btn, () => {
+      showMode("home");
+    });
+  });
+}
+
+/* =====================================================================
+   タイマー設定ボタン（⏱）：1.5 秒長押しで「なし → 5 → 10 → 15 → 20 → なし」
+   ===================================================================== */
+function updateTimerStatusDisplay() {
+  const el = document.getElementById("timer-status");
+  if (el) el.textContent = TimerConfig.getDisplay();
+}
+
+function setupTimerButton() {
+  const btn = document.getElementById("timer-btn");
+  if (!btn) return;
+  setupHoldButton(btn, () => {
+    // 設定を次に進める
+    TimerConfig.next();
+    playTimer.limitMs = TimerConfig.getLimitMs();
+    // 設定変更時は累計リセット・finished 解除
+    resetCumulative();
+    playTimer.finished = false;
+    updateTimerStatusDisplay();
+    // 設定のフィードバック（短く控えめに）
+    SoundKit.playTwinkle();
+  }, { ringColor: "#a36" });
+  updateTimerStatusDisplay();
+}
+
+/* =====================================================================
+   おしまい画面：🌙 と ✨ の配置（点滅なし・静止）
+   ===================================================================== */
+function setupFinishStage() {
+  const host = document.getElementById("finish-stars");
+  if (!host) return;
+  // 静的に固定配置（CSS の % で OK、resize でも崩れにくい）
+  const positions = [
+    {l: 8,  t: 12, s: 16}, {l: 18, t: 28, s: 14}, {l: 6,  t: 60, s: 18},
+    {l: 15, t: 78, s: 14}, {l: 24, t: 14, s: 16}, {l: 80, t: 16, s: 18},
+    {l: 88, t: 30, s: 14}, {l: 90, t: 62, s: 16}, {l: 82, t: 80, s: 14},
+    {l: 75, t: 14, s: 16}, {l: 42, t: 8,  s: 14}, {l: 60, t: 86, s: 14},
+  ];
+  for (const p of positions) {
+    const s = document.createElement("span");
+    s.textContent = "✨";
+    s.style.left = p.l + "%";
+    s.style.top  = p.t + "%";
+    s.style.fontSize = p.s + "px";
+    host.appendChild(s);
+  }
+}
+
+/* =====================================================================
+   HiDPI Canvas セットアップ
+   ===================================================================== */
+function setupHiDPICanvas(cv, cssSize) {
+  const dpr = window.devicePixelRatio || 1;
+  cv.width  = cssSize * dpr;
+  cv.height = cssSize * dpr;
+  cv.style.width = cssSize + "px";
+  cv.style.height = cssSize + "px";
+  const ctx2d = cv.getContext("2d");
+  ctx2d.scale(dpr, dpr);
+  return ctx2d;
+}
+function setupModeCanvas(cv) {
+  // モード用 Canvas は親サイズに追従
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    cv.width  = Math.max(1, Math.floor(w * dpr));
+    cv.height = Math.max(1, Math.floor(h * dpr));
+    const ctx2d = cv.getContext("2d");
+    ctx2d.setTransform(1,0,0,1,0,0);
+    ctx2d.scale(dpr, dpr);
+  }
+  resize();
+  return resize;
+}
+
+/* =====================================================================
+   全画面化（最初のタップで試行、失敗は無視）
+   ===================================================================== */
+let fullscreenTried = false;
+function tryFullscreen() {
+  if (fullscreenTried) return;
+  fullscreenTried = true;
+  const el = document.documentElement;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+  if (!req) return;
+  try { req.call(el); } catch (err) { /* 失敗を無視 */ }
+}
+
+/* =====================================================================
+   モード：どうぶつ
+   ===================================================================== */
+let animalIndex = 0;
+let animalTapCount = 0;
+let animalAnim = { active:false, t0:0, dur:0.45, kind:"bounce" };
+
+function initAnimal() {
+  const elEmo = document.getElementById("animal-emoji");
+  animalIndex = Math.floor(Math.random() * SoundKit.animals.length);
+  animalTapCount = 0;
+  elEmo.style.transform = "scale(1)";
+  renderAnimal();
+  const cv = document.getElementById("animal-canvas");
+  const onResize = setupModeCanvas(cv);
+  bindResize(onResize);
+  loopAnimal(cv);
+}
+function renderAnimal() {
+  const a = SoundKit.animals[animalIndex];
+  document.getElementById("animal-emoji").textContent = a.emo;
+}
+function triggerAnimalAnim(kind) {
+  animalAnim.active = true;
+  animalAnim.kind = kind;
+  animalAnim.t0 = performance.now();
+  animalAnim.dur = kind === "bounce" ? 0.45 : 0.55;
+}
+function loopAnimal(cv) {
+  const ctx2d = cv.getContext("2d");
+  function frame() {
+    const w = cv.clientWidth, h = cv.clientHeight;
+    ctx2d.clearRect(0, 0, w, h);
+    // きらきら粒
+    updateParticles(1/60);
+    drawParticles(ctx2d);
+    // 絵文字のスケール（アニメ）
+    const elEmo = document.getElementById("animal-emoji");
+    if (animalAnim.active) {
+      const t = (performance.now() - animalAnim.t0) / 1000;
+      if (t > animalAnim.dur) {
+        animalAnim.active = false;
+        elEmo.style.transform = "scale(1)";
+      } else {
+        const u = t / animalAnim.dur;
+        let s = 1;
+        if (animalAnim.kind === "bounce") {
+          // 1 → 1.3 → 1（イーズアウト）
+          s = 1 + 0.3 * Math.sin(Math.PI * u);
+        } else {
+          // つぶれる（1 → 0.8 → 1、横にも少し効くよう X 軸も）
+          s = 1 - 0.2 * Math.sin(Math.PI * u);
+        }
+        elEmo.style.transform = `scale(${s.toFixed(3)})`;
+      }
+    }
+    if (currentMode === "animal") requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+/* どうぶつのタップ処理：HTML 側にアタッチ */
+function setupAnimalTap() {
+  const stage = document.getElementById("stage-animal");
+  const elEmo = document.getElementById("animal-emoji");
+
+  function tap(x, y, isEmoji) {
+    // 絵文字タップ → 弾む/つぶれる + 鳴き声 + 読み上げ → 3 回で次の動物へ
+    // 背景タップ → 鳴き声/読み上げなし、効果音だけ → 即座に次の動物へ
+    SoundKit.unlock();
+    tryFullscreen();
+    const cv = document.getElementById("animal-canvas");
+    const r = cv.getBoundingClientRect();
+    if (isEmoji) {
+      // 弾む（bounce）+ つぶれる（squash）を交互
+      triggerAnimalAnim(animalTapCount % 2 === 0 ? "bounce" : "squash");
+      SoundKit.playAnimal(animalIndex);
+      spawnParticles(x - r.left, y - r.top,
+        ["#ffd166","#ef476f","#06d6a0","#118ab2","#fff"][animalIndex % 5],
+        30);
+      animalTapCount++;
+      if (animalTapCount >= 3) {
+        animalTapCount = 0;
+        animalIndex = (animalIndex + 1) % SoundKit.animals.length;
+        setTimeout(renderAnimal, 120);
+      }
+    } else {
+      // 背景タップ → 効果音だけ鳴らして次の動物へ
+      SoundKit.playTwinkle();
+      animalTapCount = 0;
+      animalIndex = (animalIndex + 1) % SoundKit.animals.length;
+      renderAnimal();
+    }
+  }
+
+  function getXY(e) {
+    if (e.touches && e.touches[0]) return {x: e.touches[0].clientX, y: e.touches[0].clientY};
+    return {x: e.clientX, y: e.clientY};
+  }
+
+  function onDown(e) {
+    e.preventDefault();
+    // 手のひら相当の接触は無視（複数本指のタップや通常のタップはそのまま）
+    if (isPalmTouch(e)) return;
+    const {x, y} = getXY(e);
+    const r = elEmo.getBoundingClientRect();
+    const inside = x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    tap(x, y, inside);
+  }
+  stage.addEventListener("pointerdown", onDown, {passive:false});
+  stage.addEventListener("click", e => {
+    // pointerdown で処理しているので click は抑止（二重発火防止）
+    e.preventDefault();
+  });
+}
+
+/* =====================================================================
+   モード：ふうせん
+   ===================================================================== */
+const BALLOON_COLORS = [
+  { name: "あか",     hex: "#ff5a5f" },
+  { name: "あお",     hex: "#3a86ff" },
+  { name: "きいろ", hex: "#ffd60a" },
+  { name: "みどり",   hex: "#06d6a0" },
+  { name: "むらさき", hex: "#9b5de5" },
+  { name: "ピンク",   hex: "#ff80aa" },
+  { name: "オレンジ", hex: "#fb8500" },
+  { name: "みずいろ", hex: "#00b4d8" },
+];
+const balloons = [];
+let balloonLastSpawn = 0;
+const BALLOON_MAX_ALIVE = 12;             // 同時表示の上限
+
+function initBalloon() {
+  balloons.length = 0;
+  balloonLastSpawn = performance.now();
+  const cv = document.getElementById("balloon-canvas");
+  const onResize = setupModeCanvas(cv);
+  bindResize(onResize);
+  loopBalloon(cv);
+}
+
+function spawnBalloon(x, y) {
+  // 同時表示の上限チェック
+  if (balloons.filter(b => b.alive).length >= BALLOON_MAX_ALIVE) return;
+  const c = BALLOON_COLORS[Math.floor(Math.random() * BALLOON_COLORS.length)];
+  // 半径は画面短辺の 9〜14%（1歳児でも指で届くサイズ）
+  const base = Math.min(window.innerWidth, window.innerHeight);
+  const r = base * (0.09 + Math.random() * 0.05);
+  balloons.push({
+    x: x != null ? x : Math.random() * (window.innerWidth),
+    y: y != null ? y : window.innerHeight + r + 20,
+    r,
+    color: c.hex,
+    name: c.name,
+    vx: (Math.random() - 0.5) * 8,
+    vy: -60 - Math.random() * 40,
+    sway: Math.random() * Math.PI * 2,
+    swaySpd: 1.6 + Math.random() * 1.2,
+    alive: true,
+  });
+}
+function updateBalloons(dt, w, h) {
+  for (let i = balloons.length - 1; i >= 0; i--) {
+    const b = balloons[i];
+    if (!b.alive) { balloons.splice(i, 1); continue; }
+    b.sway += b.swaySpd * dt;
+    b.x += b.vx * dt + Math.sin(b.sway) * 4 * dt * 60 / 60;
+    b.y += b.vy * dt;
+    // 上に消えたら除去
+    if (b.y + b.r < -20) { balloons.splice(i, 1); continue; }
+  }
+}
+function drawBalloons(ctx2d, w, h) {
+  for (const b of balloons) {
+    if (!b.alive) continue;
+
+    // ひも（半径に比例：r/4 横振り + r*1.4 縦長さ）
+    ctx2d.save();
+    ctx2d.strokeStyle = "rgba(0,0,0,.35)";
+    ctx2d.lineWidth = 1.5;
+    ctx2d.beginPath();
+    ctx2d.moveTo(b.x, b.y + b.r);
+    ctx2d.quadraticCurveTo(
+      b.x + b.r * 0.25, b.y + b.r + b.r * 0.7,
+      b.x, b.y + b.r + b.r * 1.4);
+    ctx2d.stroke();
+    ctx2d.restore();
+
+    // 球
+    const grad = ctx2d.createRadialGradient(
+      b.x - b.r * 0.35, b.y - b.r * 0.35, b.r * 0.2,
+      b.x, b.y, b.r);
+    grad.addColorStop(0, "rgba(255,255,255,.6)");
+    grad.addColorStop(1, b.color);
+    ctx2d.fillStyle = grad;
+    ctx2d.beginPath();
+    ctx2d.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx2d.fill();
+  }
+}
+
+function loopBalloon(cv) {
+  const ctx2d = cv.getContext("2d");
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    const w = cv.clientWidth, h = cv.clientHeight;
+
+    // 自然発生（0.6 秒に 1 個程度）
+    if (now - balloonLastSpawn > 600) {
+      spawnBalloon();
+      balloonLastSpawn = now;
+    }
+
+    updateBalloons(dt, w, h);
+    ctx2d.clearRect(0, 0, w, h);
+    drawBalloons(ctx2d, w, h);
+    updateParticles(dt);
+    drawParticles(ctx2d);
+
+    if (currentMode === "balloon") requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+function setupBalloonTap() {
+  const cv = document.getElementById("balloon-canvas");
+  function getXY(e) {
+    if (e.touches && e.touches[0]) return {x: e.touches[0].clientX, y: e.touches[0].clientY};
+    return {x: e.clientX, y: e.clientY};
+  }
+  function onDown(e) {
+    e.preventDefault();
+    // 手のひら相当の接触は無視
+    if (isPalmTouch(e)) return;
+    SoundKit.unlock();
+    tryFullscreen();
+    const {x, y} = getXY(e);
+    const r = cv.getBoundingClientRect();
+    const lx = x - r.left, ly = y - r.top;
+    // 風船に当たったか判定（当たり判定の余白も半径に比例）
+    let hit = null;
+    for (const b of balloons) {
+      if (!b.alive) continue;
+      const dx = lx - b.x, dy = ly - b.y;
+      const pad = b.r * 0.2;
+      if (dx*dx + dy*dy <= (b.r + pad) * (b.r + pad)) { hit = b; break; }
+    }
+    if (hit) {
+      hit.alive = false;
+      SoundKit.playPop();
+      safeSpeak(hit.name);
+      spawnParticles(hit.x, hit.y, hit.color, 40);
+    } else {
+      // 何もない所をタップ → そこに風船
+      spawnBalloon(lx, ly);
+      // 風船が出ると嬉しい音
+      SoundKit.playTwinkle();
+    }
+  }
+  cv.addEventListener("pointerdown", onDown, {passive:false});
+  cv.addEventListener("click", e => e.preventDefault());
+}
+
+/* =====================================================================
+   モード：いろ
+   ===================================================================== */
+const ripples = [];
+
+function initColor() {
+  ripples.length = 0;
+  const cv = document.getElementById("color-canvas");
+  const onResize = setupModeCanvas(cv);
+  bindResize(onResize);
+  loopColor(cv);
+}
+
+function triggerRipple(x, y, color) {
+  // 最大半径は画面短辺の 25〜45% のランダム（どの方向でも画面からはみ出にくい）
+  const base = Math.min(window.innerWidth, window.innerHeight);
+  const max = base * (0.25 + Math.random() * 0.20);
+  ripples.push({x, y, r: 0, max, life: 0, ttl: 0.9, color});
+}
+
+function loopColor(cv) {
+  const ctx2d = cv.getContext("2d");
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    const w = cv.clientWidth, h = cv.clientHeight;
+
+    // 背景（黒）
+    ctx2d.fillStyle = "#0b1020";
+    ctx2d.fillRect(0, 0, w, h);
+
+    // 波紋更新/描画
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const r = ripples[i];
+      r.life += dt;
+      r.r = Math.min(r.max, r.r + dt * 240);   // max を超える膨らみは無効化
+      if (r.life >= r.ttl) ripples.splice(i, 1);
+    }
+    for (const r of ripples) {
+      const a = 1 - r.life / r.ttl;
+      ctx2d.save();
+      // 塗りつぶしの波紋（半透明 alpha 0.5 → 0 で消える）
+      ctx2d.globalAlpha = a * 0.5;
+      ctx2d.fillStyle = r.color;
+      ctx2d.beginPath();
+      ctx2d.arc(r.x, r.y, r.r, 0, Math.PI*2);
+      ctx2d.fill();
+      ctx2d.restore();
+    }
+
+    if (currentMode === "color") requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+const COLOR_BAND = [
+  "#ff5a5f", // 赤
+  "#3a86ff", // 青
+  "#ffd60a", // 黄
+  "#06d6a0", // 緑
+  "#9b5de5", // 紫
+];
+
+function setupColorTap() {
+  const cv = document.getElementById("color-canvas");
+  let lastNoteAt = 0;
+  // pointerId ごとに状態を持つ（複数本指で同時に異なる x をなぞれる）
+  const pointers = new Map();
+
+  function getXY(e) {
+    if (e.touches && e.touches[0]) return {x: e.touches[0].clientX, y: e.touches[0].clientY};
+    return {x: e.clientX, y: e.clientY};
+  }
+
+  function onDown(e) {
+    e.preventDefault();
+    // 手のひら相当の接触は無視
+    if (isPalmTouch(e)) return;
+    SoundKit.unlock();
+    tryFullscreen();
+    const {x, y} = getXY(e);
+    const r = cv.getBoundingClientRect();
+    const lx = x - r.left, ly = y - r.top;
+    pointers.set(e.pointerId, {lastX: lx, lastY: ly});
+    onPoint(lx, ly, /*strong*/ true);
+  }
+  function onMove(e) {
+    const p = pointers.get(e.pointerId);
+    if (!p) return;
+    e.preventDefault();
+    const {x, y} = getXY(e);
+    const r = cv.getBoundingClientRect();
+    const lx = x - r.left, ly = y - r.top;
+    const dx = lx - p.lastX;
+    p.lastX = lx; p.lastY = ly;
+    if (Math.abs(dx) < 2) return;          // 同じ場所は無視（連打防止）
+    onPoint(lx, ly, /*strong*/ false);
+  }
+  function onUp(e) {
+    if (e && e.pointerId != null) pointers.delete(e.pointerId);
+    if (e && e.preventDefault) e.preventDefault();
+  }
+
+  function onPoint(lx, ly, strong) {
+    const w = cv.clientWidth;
+    const xn = Math.max(0, Math.min(1, lx / w));
+    const freq = SoundKit.noteForX(xn);
+    const band = COLOR_BAND[Math.floor(xn * COLOR_BAND.length) % COLOR_BAND.length];
+    const ctx2d = cv.getContext("2d");
+    triggerRipple(lx, ly, band);
+    const now = performance.now();
+    if (strong) {
+      SoundKit.playNote(freq);
+      lastNoteAt = now;
+    } else {
+      // 連続して鳴ると耳が痛くならないよう 80ms 間隔で間引き
+      // マルチタッチ時は複数の指で同時に strong が来るので、いずれか 1 つだけ通す
+      if (now - lastNoteAt > 80) {
+        SoundKit.playNoteSmall(freq);
+        lastNoteAt = now;
+      }
+    }
+  }
+
+  cv.addEventListener("pointerdown", onDown, {passive:false});
+  cv.addEventListener("pointermove", onMove, {passive:false});
+  cv.addEventListener("pointerup",   onUp,   {passive:false});
+  cv.addEventListener("pointercancel", onUp, {passive:false});
+  // pointerleave は iOS で pointerup が来ない保険（家の終了時に map をクリア）
+  cv.addEventListener("pointerleave", onUp, {passive:false});
+  cv.addEventListener("click", e => e.preventDefault());
+}
+
+/* =====================================================================
+   ホーム：カードでモード切替
+   ===================================================================== */
+function setupHomeCards() {
+  document.querySelectorAll(".home-card").forEach(card => {
+    card.addEventListener("click", e => {
+      e.preventDefault();
+      SoundKit.unlock();
+      tryFullscreen();
+      showMode(card.dataset.mode);
+    });
+    // 絵文字だけ表示（対象児が読める文字なし）
+    const map = { animal:"🐶", balloon:"🎈", color:"🎨" };
+    card.textContent = map[card.dataset.mode] || "•";
+  });
+}
+
+/* =====================================================================
+   起動
+   ===================================================================== */
+let playTimerLoopInterval = null;
+function playTimerTickInterval() {
+  const now = performance.now();
+  if (playTimer.finished) return;             // 二重防止
+  if (playTimer.limitMs <= 0) return;         // 設定なし
+  if (!playTimer.inMode) return;              // ホーム・おしまいは数えない
+  if (playTimer.pausedAtMs != null) return;   // 非表示中
+  if (currentElapsedMs(now) >= playTimer.limitMs) {
+    triggerFinish(now);
+  }
+}
+
+function start() {
+  TimerConfig.init();
+  playTimer.limitMs = TimerConfig.getLimitMs();
+  setupHomeButtons();
+  setupTimerButton();
+  setupHomeCards();
+  setupAnimalTap();
+  setupBalloonTap();
+  setupColorTap();
+  setupFinishStage();
+  // タブが裏に行ったときは時間計測を止める
+  document.addEventListener("visibilitychange", () => {
+    const now = performance.now();
+    if (document.visibilityState === "hidden") {
+      onVisibilityHidden(now);
+    } else {
+      onVisibilityVisible(now);
+      // iOS は裏→表で AudioContext が "interrupted" に戻ることがあるので resume を試みる
+      try { SoundKit.tryResume(); } catch (_) { /* ignore */ }
+    }
+  });
+  // タイマー監視（500ms ごとにチェック、軽量）
+  if (playTimerLoopInterval == null) {
+    playTimerLoopInterval = setInterval(playTimerTickInterval, 500);
+  }
+  // ホームに居続ける
+  showMode("home");
+}
+start();
+
+/* =====================================================================
+   念のためのエラーハンドリング
+   ===================================================================== */
+window.addEventListener("error", ev => {
+  console.warn("[baby-tap] runtime error:", ev.message);
+});
+window.addEventListener("unhandledrejection", ev => {
+  console.warn("[baby-tap] unhandled rejection:", ev.reason);
+});
+</script>
+</body>
+</html>
