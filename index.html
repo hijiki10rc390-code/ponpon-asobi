@@ -531,7 +531,6 @@ window.addEventListener("touchmove", e => {
 const SoundKit = (() => {
   let ctx = null;
   let master = null;
-  let unlocked = false;
   // 同時発音数の上限。超えたら新しい発音を捨てる（古い方を奪わない）。
   let voiceCount = 0;
   const MAX_VOICES = 8;
@@ -558,26 +557,36 @@ const SoundKit = (() => {
       ctx.resume().catch(err => console.warn("[audio] resume failed:", err));
     }
   }
+  // 音を鳴らす直前の保険。ctx が止まっていても resume を一度試す。
+  // 鳴らせなかった場合も他の処理（描画・反応）は止めない。
+  function ensureRunning() {
+    if (!ctx) return;
+    if (ctx.state === "running") return;
+    try { tryResume(); } catch (err) { console.warn("[audio] ensureRunning failed:", err); }
+  }
   function unlock() {
     ensure();
     tryResume();
     // iOS: ユーザー操作の同期処理内で無音バッファを start(0) してアンロックする。
     // ctx.resume() は非同期なので最初のタップ時点では state がまだ "running" でないことが多い。
     // state を待たずに同期的に start() を呼べば、start は resume 完了後にキューから再生される。
-    // iOS で「最初のユーザー操作内に AudioContext 起点の音を鳴らす」のは確実なアンロック手段。
-    if (ctx && !unlocked) {
+    //
+    // 「試行済み」フラグは使わない。判定は ctx.state === "running" のみで行い、
+    // running になるまで何度でも start / resume を試す。
+    // フラグで 1 回きりにしてしまうと、iOS Safari は pointerdown 内では resume が効かず、
+    // 一度失敗すると二度と音が出なかった（実機 iPad で全タップ無音）。
+    if (ctx && ctx.state !== "running") {
       try {
         const buf = ctx.createBuffer(1, Math.max(1, Math.floor(ctx.sampleRate * 0.1)), ctx.sampleRate);
         const src = ctx.createBufferSource();
         src.buffer = buf;
         src.connect(ctx.destination);
         src.start(0);
-        // 無音バッファの start を呼んだ後でのみ unlocked=true にする
-        // （start が失敗した場合はフラグを立てない＝次回タップで再試行）
-        unlocked = true;
+        // start が失敗してもフラグは立たない → 次の pointerup / touchend / click で再試行される
       } catch (err) { /* ignore */ }
     }
     // TTS プライミング（iOS は最初の speak がユーザー操作の同期処理内でないと無音）
+    // primeTTS 自身が ttsPrimed で 1 度きりガードするので、二重読みにはならない
     // 未定義でも try/catch で握り潰す（定義は SoundKit の外）
     try { primeTTS(); } catch (_) { /* not defined */ }
   }
@@ -809,6 +818,7 @@ const SoundKit = (() => {
   // おしまい音：下降する3音の鈴（最大 gain 0.20、master 0.22 通過後に 0.044）
   function finishTone() {
     if (!ctx || !acquireVoice(500)) return;
+    ensureRunning();
     const now = ctx.currentTime;
     // 880 → 698 → 523（A5 → F5 → C5）三角波、各 0.18s 間隔
     [880, 698, 523].forEach((f, i) => {
@@ -880,6 +890,7 @@ const SoundKit = (() => {
   function playAnimal(idx) {
     const a = animals[idx];
     if (!a) return;
+    ensureRunning();
     // 鳴き声の最長は roar ≒ 0.9s、余裕を 1.2s にする
     // acquireVoice 内の setTimeout が自動で解放するので、手動の releaseVoice は呼ばない
     if (!acquireVoice(1200)) return;
@@ -887,11 +898,13 @@ const SoundKit = (() => {
     setTimeout(() => safeSpeak(a.read), 250); // 読み上げを 250ms 遅らせ、合成音と被せる
   }
   function playPop()  {
+    ensureRunning();
     // acquireVoice 内の setTimeout が自動で解放する（二重解放しない）
     if (!acquireVoice(300)) return;
     pop();
   }
   function playTwinkle() {
+    ensureRunning();
     // playTwinkle が発音の入口、ここ 1 回だけ acquire。twinkle() 内部では acquire しない
     if (!acquireVoice(300)) return;
     twinkle();
@@ -906,6 +919,7 @@ const SoundKit = (() => {
   }
   function playNote(freq, dur = 0.35, gain = 0.22) {
     if (!ctx) return;
+    ensureRunning();   // ctx が止まっている場合に resume を試す（音が出ない時の保険）
     // 倍音(o2)含めて 1 note = 1 voice として数える（発音の入口で 1 回だけ acquire）
     // 解放は acquireVoice 内の setTimeout に任せる（手動で releaseVoice を呼ばない）
     if (!acquireVoice(Math.ceil((dur + 0.3) * 1000))) return;
@@ -1085,6 +1099,7 @@ const SoundKit = (() => {
   function playVehicleSound(kind) {
     const v = vehicles[kind];
     if (!v) return;
+    ensureRunning();
     v.fn();
   }
 
@@ -1097,6 +1112,33 @@ const SoundKit = (() => {
     animals,
   };
 })();
+
+/* =====================================================================
+   音声アンロックのグローバル監視
+   - iOS Safari（実機 iPad）は pointerdown / touchstart の中では AudioContext や
+     speechSynthesis のロックを解除しないことがある。確実に許可されるのは
+     touchend / pointerup / click の中でなので、どこからタップが飛んで来ても
+     capture:true で拾って SoundKit.unlock() を呼ぶ。
+   - preventDefault はしない（passive:true）。既存の各モードのハンドラも邪魔しない。
+   - unlock() 自体は ctx.state === "running" になるまで何度でも試すが、
+     running になった後は重い処理は飛ばすので、毎タップで呼んでも軽い。
+   ===================================================================== */
+function safeUnlockAudio() {
+  try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
+}
+function safeResumeAudio() {
+  try { SoundKit.tryResume(); } catch (err) { console.warn("[audio] tryResume failed:", err); }
+}
+["pointerdown", "pointerup", "touchstart", "touchend", "click"].forEach(type => {
+  window.addEventListener(type, safeUnlockAudio, {capture: true, passive: true});
+});
+// 裏→表復帰・ページ復帰・フォーカス復帰で止まっていた AudioContext を起こす
+//（tryResume は state が running でなければ何もしないので軽い）
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") safeResumeAudio();
+});
+window.addEventListener("pageshow",  safeResumeAudio);
+window.addEventListener("focus",    safeResumeAudio);
 
 /* =====================================================================
    読み上げ (speechSynthesis)
@@ -1153,18 +1195,17 @@ function safeSpeak(text) {
 }
 
 /* =====================================================================
-   手のひら判定（1歳児が手のひら全体でタップするのを無視）
-   - touch かつ width / height が両方 60px を超える接触を無視
-   - 値が取れない環境（0 や undefined）では無視しない（=通常タップとして扱う）
+   手のひら判定（現在 常時 false = 無効）
+   - 実機 iPad Safari で「🏠ボタンとホームのカード以外、タップが全く反応しない」症状があり、
+     原因はここで指を掌と誤判定していたこと。PointerEvent.width / height は iPad では
+     指でタップしても 60px を超える大きな値が出て、全タップが「掌」として捨てられていた。
+   - 幼児が掌で叩いても反応する方が弊害がないため、サイズによる判定は行わない。
+   - 呼び出し側の 8 か所はそのまま（常に false が返るので素通りする）。
+   - PALM_THRESHOLD は参考値として残す（今後判定を復活させる場合に使う）。
    ===================================================================== */
-const PALM_THRESHOLD = 60;
+const PALM_THRESHOLD = 60;   // 参考値（現在は判定に使用していない）
 function isPalmTouch(e) {
-  if (!e || e.pointerType !== "touch") return false;
-  const w = e.width, h = e.height;
-  // 環境依存で取れない時は無視せず通す
-  if (w == null || h == null) return false;
-  if (w <= 0 || h <= 0) return false;
-  return w > PALM_THRESHOLD && h > PALM_THRESHOLD;
+  return false;
 }
 
 /* =====================================================================
@@ -1503,8 +1544,9 @@ function setupHoldButton(btn, onLongPress, opts) {
     ctx2d.restore();
   }
   function startHold() {
-    SoundKit.unlock();
-    tryFullscreen();
+    // 音/全画面の準備で例外が出ても、絵・音のメイン処理は必ず走るよう try/catch で囲う
+    try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
+    try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
     locked = true;
     start = performance.now();
     btn.classList.add("locked");
@@ -1641,15 +1683,42 @@ function setupModeCanvas(cv) {
 
 /* =====================================================================
    全画面化（最初のタップで試行、失敗は無視）
+   - iPadOS Safari は documentElement.requestFullscreen を持つが、pointerdown 内で呼ぶと
+     全画面遷移で最初のタップごと消えることがある。また「ホーム画面に追加して起動」
+     （standalone）ならすでに全画面相当なので、何もしなくてよい。
+   - iPad 実機では全画面化を呼ばない。判定は「複数タッチ対応 + iOS/Mac を名乗る UA」。
    ===================================================================== */
 let fullscreenTried = false;
+// ホーム画面から起動済み（standalone）なら全画面化不要
+function isStandaloneDisplay() {
+  try {
+    if (window.navigator && window.navigator.standalone === true) return true;
+  } catch (err) { /* ignore */ }
+  try {
+    if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true;
+  } catch (err) { /* ignore */ }
+  return false;
+}
+// iPad / iPhone 実機かどうか（PC の Chrome は UA に Macintosh が無いので false）
+function isLikelyIOSDevice() {
+  try {
+    if (!(navigator.maxTouchPoints > 1)) return false;
+    return /iPad|iPhone|iPod|Macintosh|Mac OS X/i.test(navigator.userAgent || "");
+  } catch (err) { return false; }
+}
 function tryFullscreen() {
   if (fullscreenTried) return;
+  // すでに全画面相当、または iPad 実機なら何もしない（初回タップを潰さない）
+  if (isStandaloneDisplay() || isLikelyIOSDevice()) { fullscreenTried = true; return; }
   fullscreenTried = true;
   const el = document.documentElement;
   const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
   if (!req) return;
-  try { req.call(el); } catch (err) { /* 失敗を無視 */ }
+  try {
+    const ret = req.call(el);
+    // Promise を返す実装ではユーザー操作なしだと reject する。未処理拒否を出さない
+    if (ret && typeof ret.catch === "function") ret.catch(() => {});
+  } catch (err) { /* 失敗を無視 */ }
 }
 
 /* =====================================================================
@@ -1721,8 +1790,9 @@ function setupAnimalTap() {
   function tap(x, y, isEmoji) {
     // 絵文字タップ → 弾む/つぶれる + 鳴き声 + 読み上げ → 3 回で次の動物へ
     // 背景タップ → 鳴き声/読み上げなし、効果音だけ → 即座に次の動物へ
-    SoundKit.unlock();
-    tryFullscreen();
+    // 音/全画面の準備で例外が出ても、絵・音のメイン処理は必ず走るよう try/catch で囲う
+    try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
+    try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
     const cv = document.getElementById("animal-canvas");
     const r = cv.getBoundingClientRect();
     if (isEmoji) {
@@ -1889,8 +1959,9 @@ function setupBalloonTap() {
     e.preventDefault();
     // 手のひら相当の接触は無視
     if (isPalmTouch(e)) return;
-    SoundKit.unlock();
-    tryFullscreen();
+    // 音/全画面の準備で例外が出ても、絵・音のメイン処理は必ず走るよう try/catch で囲う
+    try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
+    try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
     const {x, y} = getXY(e);
     const r = cv.getBoundingClientRect();
     const lx = x - r.left, ly = y - r.top;
@@ -1997,8 +2068,9 @@ function setupColorTap() {
     e.preventDefault();
     // 手のひら相当の接触は無視
     if (isPalmTouch(e)) return;
-    SoundKit.unlock();
-    tryFullscreen();
+    // 音/全画面の準備で例外が出ても、絵・音のメイン処理は必ず走るよう try/catch で囲う
+    try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
+    try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
     const {x, y} = getXY(e);
     const r = cv.getBoundingClientRect();
     const lx = x - r.left, ly = y - r.top;
@@ -2173,8 +2245,9 @@ function setupMusicTap() {
   function onDown(e) {
     e.preventDefault();
     if (isPalmTouch(e)) return;
-    SoundKit.unlock();
-    tryFullscreen();
+    // 音/全画面の準備で例外が出ても、絵・音のメイン処理は必ず走るよう try/catch で囲う
+    try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
+    try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
     const k = keyFromPoint(e.clientX, e.clientY);
     active.set(e.pointerId, k);
     if (k) playForKey(k);
@@ -2421,8 +2494,9 @@ function setupVehicleTap() {
   function onDown(e) {
     e.preventDefault();
     if (isPalmTouch(e)) return;
-    SoundKit.unlock();
-    tryFullscreen();
+    // 音/全画面の準備で例外が出ても、絵・音のメイン処理は必ず走るよう try/catch で囲う
+    try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
+    try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
     // タップされた DOM が vehicle か判定（祖先方向にたどる）
     let node = e.target;
     while (node && node !== host) {
@@ -2568,8 +2642,9 @@ function setupDrawTap() {
     e.preventDefault();
     // 掌相当の接触は無視（他モードと同じ）
     if (isPalmTouch(e)) return;
-    SoundKit.unlock();
-    tryFullscreen();
+    // 音/全画面の準備で例外が出ても、絵・音のメイン処理は必ず走るよう try/catch で囲う
+    try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
+    try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
     const {x, y} = getXY(e);
     const r = cv.getBoundingClientRect();
     const lx = x - r.left, ly = y - r.top;
@@ -2647,8 +2722,9 @@ function setupDrawTap() {
     clearBtn.addEventListener("pointerdown", ev => {
       ev.preventDefault();
       if (isPalmTouch(ev)) return;
-      SoundKit.unlock();
-      tryFullscreen();
+      // 音/全画面の準備で例外が出ても、クリア処理は必ず走るよう try/catch で囲う
+      try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
+      try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
       drawStrokes.length = 0;
       particles.length = 0;
       // クリア時の軽いフィードバック音（他モードの playTwinkle と同系のきらきら音）
@@ -2668,8 +2744,9 @@ function setupHomeCards() {
   document.querySelectorAll(".home-card").forEach(card => {
     card.addEventListener("click", e => {
       e.preventDefault();
-      SoundKit.unlock();
-      tryFullscreen();
+      // 音/全画面の準備で例外が出ても、モード切替は必ず走るよう try/catch で囲う
+      try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
+      try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
       showMode(card.dataset.mode);
     });
     // 絵文字だけ表示（対象児が読める文字なし）
