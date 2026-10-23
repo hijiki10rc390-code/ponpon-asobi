@@ -1147,7 +1147,7 @@ const SoundKit = (() => {
     if (!ctx || animalLoading) return;
     animalLoading = true;
     ANIMAL_FILES.forEach((name, i) => {
-      fetch("sounds/" + name + ".mp3?v=3")
+      fetch("sounds/" + name + ".mp3?v=4")
         .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.arrayBuffer(); })
         .then(ab => new Promise((ok, ng) => ctx.decodeAudioData(ab, ok, ng)))   // 古い Safari 用にコールバック形式
         .then(buf => { animalBuffers[i] = buf; })
@@ -1428,14 +1428,22 @@ const SoundKit = (() => {
       const o = osc("sawtooth", 80);
       o.connect(lowpass(650)).connect(g);
       update = s => { set(o.frequency, 75 + s * 120); set(g.gain, s > 0.02 ? 0.10 + 0.10 * s : 0.0001); };
-    } else if (kind === 1) {     // バス：低くて太いディーゼル
-      const o = osc("sawtooth", 46);
-      const o2 = osc("square", 23);
-      o.connect(lowpass(380)).connect(g);
-      o2.connect(lowpass(200)).connect(g);
+    } else if (kind === 1) {     // バス：ディーゼルのうなり（小さなスピーカーでも聞こえる 90Hz 以上）
+      const o = osc("sawtooth", 90);
+      const o2 = osc("square", 180);
+      const am = ctx.createGain();
+      am.gain.value = 0.75;
+      const lfo = osc("sine", 12);
+      const depth = ctx.createGain();
+      depth.gain.value = 0.25;
+      lfo.connect(depth).connect(am.gain);
+      const g2 = ctx.createGain(); g2.gain.value = 0.35;
+      o.connect(lowpass(850)).connect(am);
+      o2.connect(g2).connect(lowpass(700)).connect(am);
+      am.connect(g);
       update = s => {
-        set(o.frequency, 44 + s * 55); set(o2.frequency, 22 + s * 27);
-        set(g.gain, s > 0.02 ? 0.13 + 0.10 * s : 0.0001);
+        set(o.frequency, 86 + s * 70); set(o2.frequency, 172 + s * 140); set(lfo.frequency, 10 + s * 8);
+        set(g.gain, s > 0.02 ? 0.13 + 0.09 * s : 0.0001);
       };
     } else if (kind === 2) {     // でんしゃ：ガタンゴトン（速いほど間隔が短い）
       let flip = 0;
@@ -1489,19 +1497,28 @@ const SoundKit = (() => {
       };
       tick();
       update = s => { speed = s; set(g.gain, s > 0.02 ? 0.06 + 0.03 * s : 0.0001, 0.03); };
-    } else {                     // トラクター：ドッドッドッ（低い音を細かく刻む）
-      const o = osc("sawtooth", 58);
-      const am = ctx.createGain();
-      am.gain.value = 0.5;
-      const lfo = osc("sine", 9);
-      const depth = ctx.createGain();
-      depth.gain.value = 0.5;
-      lfo.connect(depth).connect(am.gain);
-      o.connect(lowpass(320)).connect(am).connect(g);
-      update = s => {
-        set(o.frequency, 55 + s * 35); set(lfo.frequency, 8 + s * 9);
-        set(g.gain, s > 0.02 ? 0.20 + 0.12 * s : 0.0001);
+    } else {                     // トラクター：ポンッポンッポンッ（古い農機のエンジン音。間隔は速さで変わる）
+      const tick = () => {
+        if (stopped) return;
+        if (moving()) {
+          const t = ctx.currentTime;
+          const o = ctx.createOscillator();
+          const gg = ctx.createGain();
+          o.type = "triangle";
+          o.frequency.setValueAtTime(190, t);
+          o.frequency.exponentialRampToValueAtTime(95, t + 0.09);
+          gg.gain.setValueAtTime(0.0001, t);
+          gg.gain.exponentialRampToValueAtTime(0.32, t + 0.006);
+          gg.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+          o.connect(gg).connect(out);
+          o.start(t); o.stop(t + 0.13);
+          noiseBurst(t, 0.05, 0.14, 700);
+        }
+        timer = setTimeout(tick, 210 - 120 * speed);
       };
+      timer = setTimeout(tick, 0);
+      g.gain.value = 1;
+      update = s => { speed = s; };
     }
     return {
       update(s) { if (!stopped) update(s); },
@@ -2170,7 +2187,7 @@ ANIMAL_ART[0] = SVG_OPEN + SHADOW + `
     <ellipse cx="38" cy="130" rx="9" ry="7" fill="#2b2b2b"/>
     <ellipse cx="54" cy="94" rx="15" ry="30" transform="rotate(22 54 94)" fill="#9c6330" ${OL}/>
     <ellipse cx="118" cy="96" rx="15" ry="28" transform="rotate(-22 118 96)" fill="#9c6330" ${OL}/>
-    ${eye(84, 108, 6)}
+    ${eye(70, 108, 6)}${eye(98, 108, 6)}
   </g></svg>`;
 
 /* ---------- 1 ねこ ---------- */
@@ -2208,7 +2225,7 @@ ANIMAL_ART[2] = SVG_OPEN + SHADOW + `
     <ellipse cx="58" cy="164" rx="20" ry="13" fill="#b3283f" ${OL} class="p mouth" style="transform-origin:50% 0%"/>
     <ellipse cx="58" cy="148" rx="31" ry="21" fill="#f4b6c0" ${OL}/>
     <ellipse cx="46" cy="148" rx="4" ry="6" fill="#c9788a"/><ellipse cx="68" cy="148" rx="4" ry="6" fill="#c9788a"/>
-    ${eye(66, 116, 6)}
+    ${eye(60, 116, 6)}${eye(90, 118, 6)}
   </g></svg>`;
 
 /* ---------- 3 ぶた ---------- */
@@ -2223,7 +2240,7 @@ ANIMAL_ART[3] = SVG_OPEN + SHADOW + `
     <ellipse cx="54" cy="172" rx="14" ry="10" fill="#b3283f" ${OL} class="p mouth" style="transform-origin:50% 0%"/>
     <ellipse cx="50" cy="152" rx="24" ry="18" fill="#f08aa2" ${OL}/>
     <ellipse cx="42" cy="152" rx="4" ry="6" fill="#a8465d"/><ellipse cx="58" cy="152" rx="4" ry="6" fill="#a8465d"/>
-    ${eye(78, 126, 6)}
+    ${eye(74, 126, 6)}${eye(102, 128, 6)}
     <ellipse cx="108" cy="150" rx="9" ry="6" fill="#f4849d" opacity=".7"/>
   </g></svg>`;
 
@@ -2265,7 +2282,8 @@ ANIMAL_ART[5] = SVG_OPEN + SHADOW + `
     <ellipse cx="72" cy="158" rx="12" ry="10" fill="#d6455f" ${OL} class="p mouth" style="transform-origin:50% 0%"/>
     <ellipse cx="70" cy="146" rx="13" ry="9" fill="#7a6a62"/>
     <ellipse cx="64" cy="146" rx="3" ry="4" fill="#2b2b2b"/><ellipse cx="76" cy="146" rx="3" ry="4" fill="#2b2b2b"/>
-    <circle cx="66" cy="126" r="7" fill="#fff"/>${eye(66, 126, 4)}
+    <circle cx="64" cy="126" r="8" fill="#fff"/>${eye(64, 126, 4.5)}
+    <circle cx="92" cy="126" r="8" fill="#fff"/>${eye(92, 126, 4.5)}
   </g></svg>`;
 
 /* ---------- 6 うま ---------- */
@@ -2278,8 +2296,8 @@ ANIMAL_ART[6] = SVG_OPEN + SHADOW + `
     <path d="M98,60 L128,50 L152,114 L106,128Z" fill="#b9773e" ${OL}/>
     <path d="M112,32 Q142,58 156,114 L142,114 Q128,72 106,46Z" fill="#4a2f1b" ${OL}/>
     <path d="M92,38 L96,12 L112,34Z" fill="#a8672f" ${OL}/>
+    <g transform="rotate(-12 64 96)"><ellipse cx="62" cy="94" rx="15" ry="15" fill="#b3283f" ${OL} class="p mouth" style="transform-origin:50% 0%"/></g>
     <ellipse cx="84" cy="66" rx="20" ry="38" transform="rotate(32 84 66)" fill="#b9773e" ${OL}/>
-    <ellipse cx="62" cy="100" rx="11" ry="7" fill="#b3283f" ${OL} class="p mouth" style="transform-origin:50% 0%" transform="rotate(32 62 100)"/>
     <ellipse cx="62" cy="92" rx="3" ry="5" fill="#3a2414"/>
     ${eye(88, 54, 5)}
   </g></svg>`;
@@ -3047,8 +3065,10 @@ const VEHICLE_COUNT = 3;
 const runningVehicles = [];     // {el, kind, runState, t0, dur, dir, fromX, toX, x}
 let vehicleRunRaf = null;
 
+// 出てくる乗り物の種類（番号は SoundKit.vehicles の並び）。でんしゃ(2)は使わない
+const VEHICLE_ALLOWED = [0, 1, 3, 4, 5];
 function pickRandomVehicleKind() {
-  return Math.floor(Math.random() * SoundKit.vehicles.length);
+  return VEHICLE_ALLOWED[Math.floor(Math.random() * VEHICLE_ALLOWED.length)];
 }
 
 // 乗り物の状態: x=中心の横位置(px) / y=待機位置からの縦のずれ(px)。vx,vy=慣性の速さ(px/秒)
@@ -3228,7 +3248,7 @@ function vehicleLeave(v, now) {
 function vehicleEnter(v, now) {
   const used = runningVehicles.filter(o => o !== v && !o.hidden).map(o => o.kind);
   const cand = [];
-  for (let k = 0; k < SoundKit.vehicles.length; k++) if (!used.includes(k) && k !== v.kind) cand.push(k);
+  for (const k of VEHICLE_ALLOWED) if (!used.includes(k) && k !== v.kind) cand.push(k);
   v.kind = cand.length ? cand[Math.floor(Math.random() * cand.length)] : pickRandomVehicleKind();
   v.el.textContent = SoundKit.vehicles[v.kind].emo;
   const W = window.innerWidth;
