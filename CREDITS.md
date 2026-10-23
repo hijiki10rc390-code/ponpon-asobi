@@ -18,3 +18,7 @@
 CC BY-SA のもの（ぶた・かえる・いぬ・うし・あひる）は、出典の表示と、同じ条件での共有が必要です。
 元ファイルのページ（https://commons.wikimedia.org/wiki/File:<ファイル名>）で作者を確認できます。
 
+
+## どうぶつの絵
+
+Stable Diffusion XL 1.0（stabilityai/stable-diffusion-xl-base-1.0、CreativeML Open RAIL++-M ライセンス）で生成し、背景を切り抜いたものです（sprites/*.webp）。生成に使った指示文は tools/sd_animals_gen.py にあります。
