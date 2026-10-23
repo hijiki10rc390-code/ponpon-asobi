@@ -156,22 +156,11 @@
     z-index: 10;
     will-change: transform;
   }
-  /* 羽ばたき用の羽（にわとり・あひる）。普段は見えない */
-  #animal-emoji { position: relative; z-index: 2; }
-  #animal-stage .wing {
-    position: absolute;
-    top: 30%;
-    width: 24vmin; height: 38vmin;
-    opacity: 0;
-    z-index: 1;
-    pointer-events: none;
-    filter: drop-shadow(0 .8vmin .8vmin rgba(0,0,0,.18));
-  }
-  #animal-stage .wing svg { width: 100%; height: 100%; display: block; overflow: visible; }
-  #animal-stage .wing.l { left: -12vmin;  transform-origin: 100% 12%; }
-  #animal-stage .wing.l svg { transform: scaleX(-1); }
-  #animal-stage .wing.r { right: -12vmin; transform-origin: 0% 12%; }
-  #animal-stage .feather-fx { position: absolute; width: 5vmin; height: 8vmin; pointer-events: none; z-index: 3; }
+  #animal-emoji { position: relative; z-index: 2; line-height: 0; }
+  #animal-emoji svg { width: min(92vw, 84vmin); height: auto; display: block; overflow: visible; }
+  /* 動物の部品（頭・口・しっぽ…）は自分の枠を基準に回す。口は普段は閉じている */
+  #animal-emoji .p { transform-box: fill-box; }
+  #animal-emoji .mouth { transform: scaleY(0); }
   #animal-stage .note-fx {
     position: absolute; top: 0;
     font-size: 9vmin; line-height: 1;
@@ -1158,7 +1147,7 @@ const SoundKit = (() => {
     if (!ctx || animalLoading) return;
     animalLoading = true;
     ANIMAL_FILES.forEach((name, i) => {
-      fetch("sounds/" + name + ".mp3")
+      fetch("sounds/" + name + ".mp3?v=3")
         .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.arrayBuffer(); })
         .then(ab => new Promise((ok, ng) => ctx.decodeAudioData(ab, ok, ng)))   // 古い Safari 用にコールバック形式
         .then(buf => { animalBuffers[i] = buf; })
@@ -2139,114 +2128,360 @@ function initAnimal() {
   loopAnimal(cv);
 }
 function renderAnimal() {
-  const a = SoundKit.animals[animalIndex];
-  document.getElementById("animal-emoji").textContent = a.emo;
+  const elEmo = document.getElementById("animal-emoji");
+  elEmo.getAnimations({ subtree: true }).forEach(an => an.cancel());
+  elEmo.innerHTML = ANIMAL_ART[animalIndex] || SoundKit.animals[animalIndex].emo;
+  // 新しい動物は、ぽんと出てくる
+  if (elEmo.animate) {
+    elEmo.animate([{ opacity: 0, transform: "scale(.7)" }, { opacity: 1, transform: "scale(1.05)", offset: .7 }, { opacity: 1, transform: "scale(1)" }],
+      { duration: 320, easing: "ease-out" });
+  }
 }
 
-/* ---- どうぶつの動き：鳴いている間、動物ごとに動く（ジャンプ・羽ばたき・のけぞり等） ---- */
-// transform のキーフレーム列。鳴き声の長さ全体に均等に割り当て、最後は元の姿勢に戻る
-const ANIMAL_MOTIONS = [
-  /* いぬ   */ ["translateY(0)", "translateY(-7vmin) rotate(-6deg)", "translateY(0)", "translateY(-7vmin) rotate(6deg)", "translateY(0)", "translateY(-5vmin) rotate(-4deg)", "translateY(0)"],
-  /* ねこ   */ ["none", "scale(.92,1.15) translateY(-3vmin)", "scale(.92,1.15) translateY(-3vmin) rotate(-8deg)", "scale(1.05,.95) rotate(6deg)", "none"],
-  /* うし   */ ["none", "rotate(9deg) translateY(2vmin)", "rotate(-7deg) translateY(-2vmin)", "rotate(6deg) translateY(1vmin)", "none"],
-  /* ぶた   */ ["none", "rotate(-7deg) scale(1.05)", "rotate(7deg) scale(.97)", "rotate(-7deg) scale(1.05)", "rotate(7deg) scale(.97)", "none"],
-  /* にわとり */ ["none", "scale(.94,1.14) translateY(-6vmin) rotate(-12deg)", "scale(1.02,1.04) translateY(-2vmin) rotate(6deg)", "scale(.94,1.16) translateY(-7vmin) rotate(-16deg)", "scale(1.02,1.04) translateY(-2vmin) rotate(5deg)", "scale(.95,1.12) translateY(-5vmin) rotate(-10deg)", "none"],
-  /* ひつじ */ ["none", "translateY(-5vmin) rotate(-5deg)", "translateY(0)", "translateY(-5vmin) rotate(5deg)", "none"],
-  /* うま   */ ["none", "rotate(-14deg) translateY(-4vmin) scale(1.08)", "rotate(-18deg) translateY(-5vmin) scale(1.1)", "rotate(-8deg) scale(1.04)", "none"],
-  /* かえる */ ["none", "scale(1.15,.82) translateY(3vmin)", "translateY(-16vmin) scale(.92,1.12)", "translateY(-16vmin) scale(.92,1.12)", "scale(1.15,.82) translateY(3vmin)", "none"],
-  /* あひる */ ["none", "rotate(-8deg) translateY(-3vmin)", "rotate(8deg) translateY(-3vmin)", "rotate(-8deg) translateY(-3vmin)", "none"],
-  /* らいおん */ ["none", "scale(1.28) rotate(-5deg)", "scale(1.3) translate(1.2vmin,-.8vmin)", "scale(1.28) translate(-1.2vmin,.8vmin)", "scale(1.3) translate(1.2vmin,-.8vmin)", "scale(1.2) rotate(-3deg)", "none"],
-];
-// 羽ばたく動物（にわとり・あひる）: 羽の3層の色 [風切羽(奥), 中雨覆, 小雨覆(手前)]
-const ANIMAL_WINGS = {
-  4: ["#cdbfdc", "#e4dbee", "#fbf8ff"],
-  8: ["#5a4331", "#8a6a4f", "#b99572"],
+/* =====================================================================
+   どうぶつの全身イラスト（SVG）とアニメーション
+   - 全員、左向きの横姿。頭・口・しっぽ・羽などを別々の部品(class="p ...")にして動かす
+   - 口は class="p mouth"（普段は scaleY(0)＝閉じている。鳴くとき開く）
+   ===================================================================== */
+const OL = 'stroke="#4a3728" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"';
+const SHADOW = '<ellipse cx="150" cy="235" rx="100" ry="9" fill="rgba(0,0,0,.15)"/>';
+function eye(x, y, r) {
+  r = r || 6;
+  return `<circle cx="${x}" cy="${y}" r="${r}" fill="#222"/><circle cx="${x + r * .35}" cy="${y - r * .35}" r="${r * .38}" fill="#fff"/>`;
+}
+function leg(x, y, w, h, fill, cls, extra) {
+  return `<g class="p leg ${cls || ""}" style="transform-origin:50% 0%"><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${w / 2}" fill="${fill}" ${OL}/>${extra || ""}</g>`;
+}
+const SVG_OPEN = '<svg viewBox="0 0 300 250" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">';
+
+const ANIMAL_ART = [];
+
+/* ---------- 0 いぬ ---------- */
+ANIMAL_ART[0] = SVG_OPEN + SHADOW + `
+  <g class="p tail" style="transform-origin:0% 100%"><path d="M214,140 Q250,122 254,88" fill="none" stroke="#4a3728" stroke-width="18" stroke-linecap="round"/><path d="M214,140 Q250,122 254,88" fill="none" stroke="#e0a458" stroke-width="11" stroke-linecap="round"/></g>
+  ${leg(176, 166, 22, 64, "#d19548", "legB")}${leg(200, 166, 22, 64, "#e0a458", "legB")}
+  <ellipse cx="152" cy="150" rx="76" ry="44" fill="#e0a458" ${OL}/>
+  <ellipse cx="148" cy="172" rx="48" ry="20" fill="#f6dfb6"/>
+  ${leg(104, 166, 22, 64, "#d19548", "legF")}${leg(128, 166, 22, 64, "#e0a458", "legF")}
+  <g class="p head" style="transform-origin:90% 90%">
+    <circle cx="84" cy="118" r="44" fill="#e0a458" ${OL}/>
+    <ellipse cx="62" cy="158" rx="18" ry="13" fill="#d6455f" ${OL} class="p mouth" style="transform-origin:50% 0%"/>
+    <ellipse cx="60" cy="136" rx="28" ry="20" fill="#f6dfb6" ${OL}/>
+    <ellipse cx="38" cy="130" rx="9" ry="7" fill="#2b2b2b"/>
+    <ellipse cx="54" cy="94" rx="15" ry="30" transform="rotate(22 54 94)" fill="#9c6330" ${OL}/>
+    <ellipse cx="118" cy="96" rx="15" ry="28" transform="rotate(-22 118 96)" fill="#9c6330" ${OL}/>
+    ${eye(84, 108, 6)}
+  </g></svg>`;
+
+/* ---------- 1 ねこ ---------- */
+ANIMAL_ART[1] = SVG_OPEN + SHADOW + `
+  <g class="p tail" style="transform-origin:0% 100%"><path d="M222,168 Q270,160 262,112 Q258,92 240,98" fill="none" stroke="#4a3728" stroke-width="19" stroke-linecap="round"/><path d="M222,168 Q270,160 262,112 Q258,92 240,98" fill="none" stroke="#f2a24d" stroke-width="12" stroke-linecap="round"/></g>
+  ${leg(180, 170, 19, 60, "#e0923a", "legB")}${leg(202, 170, 19, 60, "#f2a24d", "legB")}
+  <ellipse cx="156" cy="160" rx="70" ry="38" fill="#f2a24d" ${OL}/>
+  <ellipse cx="150" cy="178" rx="44" ry="16" fill="#fff1dc"/>
+  <path d="M142,126 q4,12 0,22 M162,124 q4,12 0,22 M182,128 q4,12 0,22" fill="none" stroke="#d9822b" stroke-width="5" stroke-linecap="round"/>
+  ${leg(112, 170, 19, 60, "#e0923a", "legF")}${leg(134, 170, 19, 60, "#f2a24d", "legF")}
+  <g class="p head" style="transform-origin:80% 95%">
+    <path d="M56,108 L52,62 L88,92Z" fill="#f2a24d" ${OL}/><path d="M64,100 L62,76 L78,92Z" fill="#f5a3b0"/>
+    <path d="M112,92 L132,60 L128,108Z" fill="#f2a24d" ${OL}/><path d="M118,94 L128,76 L126,100Z" fill="#f5a3b0"/>
+    <circle cx="90" cy="130" r="42" fill="#f2a24d" ${OL}/>
+    <ellipse cx="90" cy="152" rx="11" ry="10" fill="#d6455f" ${OL} class="p mouth" style="transform-origin:50% 0%"/>
+    <ellipse cx="90" cy="146" rx="20" ry="14" fill="#fff1dc"/>
+    <path d="M84,138 L96,138 L90,146Z" fill="#f08aa0"/>
+    ${eye(72, 124, 6)}${eye(108, 124, 6)}
+    <path d="M70,142 L40,136 M70,148 L40,150 M110,142 L140,136 M110,148 L140,150" stroke="#4a3728" stroke-width="2" fill="none" stroke-linecap="round"/>
+  </g></svg>`;
+
+/* ---------- 2 うし ---------- */
+ANIMAL_ART[2] = SVG_OPEN + SHADOW + `
+  <g class="p tail" style="transform-origin:50% 0%"><path d="M232,126 Q246,160 238,192" fill="none" stroke="#4a3728" stroke-width="10" stroke-linecap="round"/><path d="M232,126 Q246,160 238,192" fill="none" stroke="#fbf7f2" stroke-width="5" stroke-linecap="round"/><ellipse cx="238" cy="200" rx="8" ry="14" fill="#3b3b3b" ${OL}/></g>
+  ${leg(184, 176, 24, 54, "#fbf7f2", "legB", '<rect x="184" y="218" width="24" height="12" rx="5" fill="#3b3b3b"/>')}${leg(208, 176, 24, 54, "#fbf7f2", "legB", '<rect x="208" y="218" width="24" height="12" rx="5" fill="#3b3b3b"/>')}
+  <rect x="80" y="106" width="154" height="92" rx="42" fill="#fbf7f2" ${OL}/>
+  <ellipse cx="132" cy="134" rx="24" ry="17" fill="#3b3b3b"/><ellipse cx="196" cy="168" rx="28" ry="19" fill="#3b3b3b"/><ellipse cx="208" cy="128" rx="15" ry="13" fill="#3b3b3b"/>
+  <ellipse cx="198" cy="200" rx="15" ry="10" fill="#f4b6c0" ${OL}/>
+  ${leg(98, 176, 24, 54, "#fbf7f2", "legF", '<rect x="98" y="218" width="24" height="12" rx="5" fill="#3b3b3b"/>')}${leg(124, 176, 24, 54, "#fbf7f2", "legF", '<rect x="124" y="218" width="24" height="12" rx="5" fill="#3b3b3b"/>')}
+  <g class="p head" style="transform-origin:85% 90%">
+    <path d="M92,88 Q84,64 96,60" fill="none" stroke="#e9d9a0" stroke-width="9" stroke-linecap="round"/>
+    <ellipse cx="108" cy="108" rx="18" ry="10" transform="rotate(25 108 108)" fill="#fbf7f2" ${OL}/>
+    <ellipse cx="76" cy="124" rx="38" ry="42" fill="#fbf7f2" ${OL}/>
+    <ellipse cx="94" cy="104" rx="15" ry="13" fill="#3b3b3b"/>
+    <ellipse cx="58" cy="164" rx="20" ry="13" fill="#b3283f" ${OL} class="p mouth" style="transform-origin:50% 0%"/>
+    <ellipse cx="58" cy="148" rx="31" ry="21" fill="#f4b6c0" ${OL}/>
+    <ellipse cx="46" cy="148" rx="4" ry="6" fill="#c9788a"/><ellipse cx="68" cy="148" rx="4" ry="6" fill="#c9788a"/>
+    ${eye(66, 116, 6)}
+  </g></svg>`;
+
+/* ---------- 3 ぶた ---------- */
+ANIMAL_ART[3] = SVG_OPEN + SHADOW + `
+  <g class="p tail" style="transform-origin:0% 50%"><path d="M228,150 q20,-8 14,-22 q-5,-12 -17,-3" fill="none" stroke="#4a3728" stroke-width="11" stroke-linecap="round"/><path d="M228,150 q20,-8 14,-22 q-5,-12 -17,-3" fill="none" stroke="#f9b5c4" stroke-width="5" stroke-linecap="round"/></g>
+  ${leg(182, 186, 22, 46, "#f09cb0", "legB", '<rect x="182" y="220" width="22" height="10" rx="5" fill="#d9788f"/>')}${leg(206, 186, 22, 46, "#f9b5c4", "legB", '<rect x="206" y="220" width="22" height="10" rx="5" fill="#d9788f"/>')}
+  <ellipse cx="158" cy="162" rx="78" ry="52" fill="#f9b5c4" ${OL}/>
+  ${leg(98, 186, 22, 46, "#f09cb0", "legF", '<rect x="98" y="220" width="22" height="10" rx="5" fill="#d9788f"/>')}${leg(122, 186, 22, 46, "#f9b5c4", "legF", '<rect x="122" y="220" width="22" height="10" rx="5" fill="#d9788f"/>')}
+  <g class="p head" style="transform-origin:90% 90%">
+    <path d="M58,106 L52,70 L88,92Z" fill="#e88aa0" ${OL}/><path d="M110,92 L128,64 L124,108Z" fill="#e88aa0" ${OL}/>
+    <circle cx="86" cy="140" r="46" fill="#f9b5c4" ${OL}/>
+    <ellipse cx="54" cy="172" rx="14" ry="10" fill="#b3283f" ${OL} class="p mouth" style="transform-origin:50% 0%"/>
+    <ellipse cx="50" cy="152" rx="24" ry="18" fill="#f08aa2" ${OL}/>
+    <ellipse cx="42" cy="152" rx="4" ry="6" fill="#a8465d"/><ellipse cx="58" cy="152" rx="4" ry="6" fill="#a8465d"/>
+    ${eye(78, 126, 6)}
+    <ellipse cx="108" cy="150" rx="9" ry="6" fill="#f4849d" opacity=".7"/>
+  </g></svg>`;
+
+/* ---------- 4 にわとり ---------- */
+ANIMAL_ART[4] = SVG_OPEN + SHADOW + `
+  <g class="p tail" style="transform-origin:0% 100%">
+    <ellipse cx="236" cy="124" rx="15" ry="38" transform="rotate(32 236 124)" fill="#e9c46a" ${OL}/>
+    <ellipse cx="238" cy="118" rx="15" ry="38" transform="rotate(10 238 118)" fill="#f4a261" ${OL}/>
+    <ellipse cx="232" cy="124" rx="14" ry="36" transform="rotate(-12 232 124)" fill="#fffaf0" ${OL}/>
+  </g>
+  ${leg(124, 196, 8, 36, "#ffb703", "legF").replace('rx="4"', 'rx="3"')}${leg(156, 196, 8, 36, "#ffb703", "legB").replace('rx="4"', 'rx="3"')}
+  <path d="M112,232 h30 M144,232 h30" stroke="#ffb703" stroke-width="6" stroke-linecap="round"/>
+  <ellipse cx="154" cy="152" rx="74" ry="56" fill="#fffaf0" ${OL}/>
+  <g class="p wing" style="transform-origin:15% 15%">
+    <path d="M136,118 Q192,104 212,152 Q198,194 140,178 Q118,150 136,118Z" fill="#f2e8d5" ${OL}/>
+    <path d="M150,138 Q176,134 192,152 M148,156 Q172,156 186,170" fill="none" stroke="rgba(74,55,40,.35)" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <g class="p head" style="transform-origin:75% 90%">
+    <circle cx="86" cy="104" r="35" fill="#fffaf0" ${OL}/>
+    <circle cx="74" cy="64" r="12" fill="#e63946" ${OL}/><circle cx="90" cy="57" r="13" fill="#e63946" ${OL}/><circle cx="106" cy="64" r="12" fill="#e63946" ${OL}/>
+    <ellipse cx="64" cy="134" rx="9" ry="14" fill="#e63946" ${OL}/>
+    <path d="M58,100 L32,108 L58,112Z" fill="#ffb703" ${OL}/>
+    <path class="p jaw" style="transform-origin:100% 0%" d="M58,112 L34,110 L58,124Z" fill="#f4a100" ${OL}/>
+    ${eye(78, 94, 6)}
+  </g></svg>`;
+
+/* ---------- 5 ひつじ ---------- */
+const SHEEP_WOOL = [[112, 150, 36], [140, 126, 38], [176, 124, 38], [206, 142, 36], [214, 172, 34], [188, 190, 36], [150, 196, 36], [116, 184, 32], [160, 160, 40]];
+ANIMAL_ART[5] = SVG_OPEN + SHADOW + `
+  ${leg(112, 180, 14, 50, "#5b4b45", "legF")}${leg(134, 180, 14, 50, "#4a3f3a", "legF")}${leg(186, 180, 14, 50, "#5b4b45", "legB")}${leg(208, 180, 14, 50, "#4a3f3a", "legB")}
+  <g class="p body">
+    ${SHEEP_WOOL.map(c => `<circle cx="${c[0]}" cy="${c[1]}" r="${c[2]}" fill="#fff" ${OL}/>`).join("")}
+    ${SHEEP_WOOL.map(c => `<circle cx="${c[0]}" cy="${c[1]}" r="${c[2] - 1}" fill="#fff"/>`).join("")}
+  </g>
+  <g class="p head" style="transform-origin:90% 90%">
+    <ellipse cx="50" cy="118" rx="16" ry="8" transform="rotate(-20 50 118)" fill="#4a3f3a" ${OL}/><ellipse cx="108" cy="116" rx="16" ry="8" transform="rotate(20 108 116)" fill="#4a3f3a" ${OL}/>
+    <ellipse cx="78" cy="132" rx="30" ry="36" fill="#5b4b45" ${OL}/>
+    <circle cx="66" cy="100" r="16" fill="#fff" ${OL}/><circle cx="86" cy="98" r="17" fill="#fff" ${OL}/><circle cx="66" cy="100" r="15" fill="#fff"/>
+    <ellipse cx="72" cy="158" rx="12" ry="10" fill="#d6455f" ${OL} class="p mouth" style="transform-origin:50% 0%"/>
+    <ellipse cx="70" cy="146" rx="13" ry="9" fill="#7a6a62"/>
+    <ellipse cx="64" cy="146" rx="3" ry="4" fill="#2b2b2b"/><ellipse cx="76" cy="146" rx="3" ry="4" fill="#2b2b2b"/>
+    <circle cx="66" cy="126" r="7" fill="#fff"/>${eye(66, 126, 4)}
+  </g></svg>`;
+
+/* ---------- 6 うま ---------- */
+ANIMAL_ART[6] = SVG_OPEN + SHADOW + `
+  <g class="p tail" style="transform-origin:0% 0%"><path d="M226,122 Q268,128 262,200 Q252,160 232,156Z" fill="#4a2f1b" ${OL}/></g>
+  ${leg(182, 160, 16, 70, "#a8672f", "legB", '<rect x="182" y="218" width="16" height="12" rx="4" fill="#3a2414"/>')}${leg(204, 160, 16, 70, "#b9773e", "legB", '<rect x="204" y="218" width="16" height="12" rx="4" fill="#3a2414"/>')}
+  <ellipse cx="158" cy="142" rx="74" ry="42" fill="#b9773e" ${OL}/>
+  ${leg(104, 160, 16, 70, "#a8672f", "legF", '<rect x="104" y="218" width="16" height="12" rx="4" fill="#3a2414"/>')}${leg(126, 160, 16, 70, "#b9773e", "legF", '<rect x="126" y="218" width="16" height="12" rx="4" fill="#3a2414"/>')}
+  <g class="p head" style="transform-origin:90% 95%">
+    <path d="M98,60 L128,50 L152,114 L106,128Z" fill="#b9773e" ${OL}/>
+    <path d="M112,32 Q142,58 156,114 L142,114 Q128,72 106,46Z" fill="#4a2f1b" ${OL}/>
+    <path d="M92,38 L96,12 L112,34Z" fill="#a8672f" ${OL}/>
+    <ellipse cx="84" cy="66" rx="20" ry="38" transform="rotate(32 84 66)" fill="#b9773e" ${OL}/>
+    <ellipse cx="62" cy="100" rx="11" ry="7" fill="#b3283f" ${OL} class="p mouth" style="transform-origin:50% 0%" transform="rotate(32 62 100)"/>
+    <ellipse cx="62" cy="92" rx="3" ry="5" fill="#3a2414"/>
+    ${eye(88, 54, 5)}
+  </g></svg>`;
+
+/* ---------- 7 かえる ---------- */
+ANIMAL_ART[7] = SVG_OPEN + SHADOW + `
+  <g class="p leg legB" style="transform-origin:80% 20%"><ellipse cx="64" cy="204" rx="42" ry="24" transform="rotate(-18 64 204)" fill="#5fb43e" ${OL}/><ellipse cx="34" cy="226" rx="22" ry="8" fill="#6cc24a" ${OL}/></g>
+  <g class="p leg legB" style="transform-origin:20% 20%"><ellipse cx="236" cy="204" rx="42" ry="24" transform="rotate(18 236 204)" fill="#5fb43e" ${OL}/><ellipse cx="266" cy="226" rx="22" ry="8" fill="#6cc24a" ${OL}/></g>
+  <g class="p body" style="transform-origin:50% 100%">
+    <ellipse cx="150" cy="172" rx="90" ry="60" fill="#6cc24a" ${OL}/>
+    <ellipse cx="112" cy="110" rx="30" ry="26" fill="#6cc24a" ${OL}/><ellipse cx="188" cy="110" rx="30" ry="26" fill="#6cc24a" ${OL}/>
+    <ellipse cx="150" cy="170" rx="70" ry="22" fill="#8c2f3b" ${OL} class="p mouth" style="transform-origin:50% 0%"/>
+    <ellipse cx="150" cy="196" rx="52" ry="34" fill="#d7f0a8" class="p belly" style="transform-origin:50% 50%"/>
+    <path d="M86,164 Q150,196 214,164" fill="none" stroke="#4a3728" stroke-width="4" stroke-linecap="round"/>
+    <g class="p eye" style="transform-origin:50% 50%"><circle cx="112" cy="104" r="22" fill="#fff" ${OL}/><circle cx="108" cy="106" r="10" fill="#222"/><circle cx="105" cy="102" r="3.5" fill="#fff"/></g>
+    <g class="p eye" style="transform-origin:50% 50%"><circle cx="188" cy="104" r="22" fill="#fff" ${OL}/><circle cx="184" cy="106" r="10" fill="#222"/><circle cx="181" cy="102" r="3.5" fill="#fff"/></g>
+    <circle cx="82" cy="150" r="9" fill="#f5a3b0" opacity=".8"/><circle cx="218" cy="150" r="9" fill="#f5a3b0" opacity=".8"/>
+    <ellipse cx="136" cy="140" rx="3" ry="2.5" fill="#3f8f2e"/><ellipse cx="164" cy="140" rx="3" ry="2.5" fill="#3f8f2e"/>
+  </g>
+  <rect x="104" y="214" width="24" height="18" rx="9" fill="#6cc24a" ${OL}/><rect x="172" y="214" width="24" height="18" rx="9" fill="#6cc24a" ${OL}/></svg>`;
+
+/* ---------- 8 あひる ---------- */
+ANIMAL_ART[8] = SVG_OPEN + SHADOW + `
+  <g class="p tail" style="transform-origin:0% 100%"><path d="M226,142 Q252,108 258,118 Q252,144 238,160Z" fill="#fffdf5" ${OL}/></g>
+  <g class="p leg legF" style="transform-origin:50% 0%"><path d="M118,210 l-4,6 h-14 l8,14 h30 l8,-14 h-14 l-4,-6Z" fill="#ff9f1c" ${OL}/></g>
+  <g class="p leg legB" style="transform-origin:50% 0%"><path d="M168,210 l-4,6 h-14 l8,14 h30 l8,-14 h-14 l-4,-6Z" fill="#ff9f1c" ${OL}/></g>
+  <ellipse cx="150" cy="168" rx="80" ry="52" fill="#fffdf5" ${OL}/>
+  <g class="p wing" style="transform-origin:15% 15%">
+    <path d="M128,148 Q184,128 218,168 Q194,208 134,196 Q112,170 128,148Z" fill="#f0e8d0" ${OL}/>
+    <path d="M148,164 Q180,160 200,174" fill="none" stroke="rgba(74,55,40,.3)" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <g class="p head" style="transform-origin:75% 95%">
+    <ellipse cx="98" cy="132" rx="22" ry="36" transform="rotate(-14 98 132)" fill="#fffdf5" ${OL}/>
+    <circle cx="82" cy="94" r="34" fill="#fffdf5" ${OL}/>
+    <path d="M56,90 Q28,90 24,100 Q40,106 58,104Z" fill="#ff9f1c" ${OL}/>
+    <path class="p jaw" style="transform-origin:100% 0%" d="M58,104 Q38,106 30,104 Q40,122 60,114Z" fill="#f08a00" ${OL}/>
+    <ellipse cx="96" cy="108" rx="9" ry="6" fill="#ffb3a0" opacity=".7"/>
+    ${eye(74, 86, 6)}
+  </g></svg>`;
+
+/* ---------- 9 らいおん ---------- */
+const LION_MANE = Array.from({ length: 12 }, (_, i) => {
+  const a = i / 12 * Math.PI * 2;
+  return [84 + Math.cos(a) * 46, 124 + Math.sin(a) * 46];
+});
+ANIMAL_ART[9] = SVG_OPEN + SHADOW + `
+  <g class="p tail" style="transform-origin:0% 100%"><path d="M228,160 Q266,160 264,116" fill="none" stroke="#4a3728" stroke-width="12" stroke-linecap="round"/><path d="M228,160 Q266,160 264,116" fill="none" stroke="#e8b04a" stroke-width="6" stroke-linecap="round"/><circle cx="264" cy="108" r="14" fill="#a85d1e" ${OL}/></g>
+  ${leg(184, 170, 26, 60, "#d99f3c", "legB")}${leg(210, 170, 26, 60, "#e8b04a", "legB")}
+  <ellipse cx="160" cy="160" rx="76" ry="44" fill="#e8b04a" ${OL}/>
+  <ellipse cx="156" cy="180" rx="46" ry="16" fill="#f7dc9a"/>
+  ${leg(108, 170, 26, 60, "#d99f3c", "legF")}${leg(134, 170, 26, 60, "#e8b04a", "legF")}
+  <g class="p head" style="transform-origin:90% 90%">
+    <g class="p mane" style="transform-origin:50% 50%">
+      ${LION_MANE.map(c => `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="21" fill="#a85d1e" ${OL}/>`).join("")}
+      ${LION_MANE.map(c => `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="20" fill="#a85d1e"/>`).join("")}
+      <circle cx="84" cy="124" r="44" fill="#a85d1e"/>
+    </g>
+    <circle cx="58" cy="92" r="12" fill="#e8b04a" ${OL}/><circle cx="110" cy="92" r="12" fill="#e8b04a" ${OL}/>
+    <circle cx="84" cy="126" r="36" fill="#e8b04a" ${OL}/>
+    <g class="p mouth" style="transform-origin:50% 0%"><ellipse cx="84" cy="158" rx="18" ry="14" fill="#b1243a" ${OL}/><path d="M72,152 L77,162 L82,152Z M86,152 L91,162 L96,152Z" fill="#fff"/></g>
+    <ellipse cx="84" cy="144" rx="22" ry="15" fill="#f7dc9a" ${OL}/>
+    <path d="M76,134 L92,134 L84,144Z" fill="#3b2a22" ${OL}/>
+    ${eye(68, 116, 6)}${eye(100, 116, 6)}
+    <path d="M60,106 L76,110 M108,106 L92,110" stroke="#4a3728" stroke-width="3" stroke-linecap="round"/>
+  </g></svg>`;
+
+/* ---------- アニメーション ---------- */
+// R.part(sel, keyframes, opt): 部品（複数可）を鳴き声の長さ dur をかけて動かす。R.root(): 全体
+function mkRunner(root, dur) {
+  const base = { duration: dur, easing: "ease-in-out" };
+  return {
+    part(sel, kf, opt) {
+      root.querySelectorAll(sel).forEach((el, i) => {
+        const o = Object.assign({}, base, typeof opt === "function" ? opt(i) : opt);
+        el.animate(kf, o);
+      });
+    },
+    root(kf, opt) { root.animate(kf, Object.assign({}, base, opt)); },
+    n(per) { return Math.max(1, Math.round(dur / per)); },
+    // 長い鳴き声でも出だしがもたつかないよう、動きの立ち上がりは 0.3 秒、終わりの戻りも 0.3 秒で揃える
+    a() { return Math.min(.3, 300 / dur); },
+    b() { return 1 - Math.min(.3, 300 / dur); },
+  };
+}
+// 口：0→開く→0 を n 回
+function kfMouth(n, open) {
+  const kf = [{ transform: "scaleY(.05)" }];
+  for (let i = 0; i < n; i++) kf.push({ transform: `scaleY(${open || 1})` }, { transform: "scaleY(.05)" });
+  return kf;
+}
+// 揺れ：基準角 ± deg を n 回
+function kfSwing(deg, n, base) {
+  base = base || 0;
+  const kf = [{ transform: `rotate(${base}deg)` }];
+  for (let i = 0; i < n; i++) kf.push({ transform: `rotate(${base - deg}deg)` }, { transform: `rotate(${base + deg}deg)` });
+  kf.push({ transform: `rotate(${base}deg)` });
+  return kf;
+}
+// 跳ね：n 回
+function kfHop(h, n, extra) {
+  extra = extra || "";
+  const kf = [{ transform: "translateY(0)" }];
+  for (let i = 0; i < n; i++) kf.push({ transform: `translateY(${-h}vmin) ${extra}` }, { transform: "translateY(0)" });
+  return kf;
+}
+// 足の小刻みな動き（交互）
+function kfLegs(deg, n) { return kfSwing(deg, n, 0); }
+
+const ANIMAL_ANIM = [];
+ANIMAL_ANIM[0] = (R) => {   // いぬ：ワン！ワン！と跳ねながら吠える
+  const n = R.n(420);
+  R.part(".mouth", kfMouth(n, 1));
+  R.part(".head", [{ transform: "rotate(0)" }, ...Array.from({ length: n }, () => [{ transform: "rotate(-14deg) translateY(-1vmin)" }, { transform: "rotate(2deg)" }]).flat(), { transform: "rotate(0)" }]);
+  R.part(".tail", kfSwing(22, n * 3, 0));
+  R.part(".legF", kfSwing(8, n, 0));
+  R.root(kfHop(4, n));
 };
-// 羽の絵（右の羽。左は CSS で反転）。付け根は左上、先は右下に向かう。3 層の羽を重ねて羽毛の段を出す
-function wingSvg(c) {
-  return `<svg viewBox="0 0 100 160" aria-hidden="true">
-    <defs>
-      <linearGradient id="wg0" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c[0]}"/><stop offset="1" stop-color="${c[0]}" stop-opacity=".85"/></linearGradient>
-      <linearGradient id="wg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c[1]}"/><stop offset="1" stop-color="${c[0]}"/></linearGradient>
-      <linearGradient id="wg2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c[2]}"/><stop offset="1" stop-color="${c[1]}"/></linearGradient>
-    </defs>
-    <g stroke="rgba(0,0,0,.14)" stroke-width="1.4" stroke-linejoin="round">
-      <path fill="url(#wg0)" d="M6,16 C40,-2 88,18 97,84 C99,112 92,138 82,154 C78,136 72,128 66,130 C62,144 54,154 46,158 C44,140 38,128 32,128 C28,142 20,152 12,154 C8,120 2,70 6,16Z"/>
-      <path fill="url(#wg1)" d="M6,16 C38,4 80,22 87,70 C89,92 84,108 76,118 C72,108 66,104 60,108 C56,120 50,126 42,128 C40,114 34,108 28,110 C24,120 18,124 12,124 C8,96 3,54 6,16Z"/>
-      <path fill="url(#wg2)" d="M6,16 C32,8 66,24 72,50 C68,50 64,54 62,60 C58,54 52,54 48,60 C44,52 38,52 34,60 C30,52 24,54 20,62 C14,54 10,52 8,60 C4,46 3,30 6,16Z"/>
-    </g>
-    <g fill="none" stroke="rgba(0,0,0,.10)" stroke-width="1.2" stroke-linecap="round">
-      <path d="M30,64 C36,90 40,110 42,126"/><path d="M52,62 C60,86 64,104 66,122"/><path d="M72,56 C82,80 86,100 84,118"/>
-    </g>
-  </svg>`;
-}
-// 抜け落ちて舞う羽
-function featherSvg(color) {
-  return `<svg viewBox="0 0 20 32" width="100%" height="100%"><path d="M10,1 C20,8 20,22 10,31 C0,22 0,8 10,1Z" fill="${color}" stroke="rgba(0,0,0,.15)" stroke-width="1"/><path d="M10,4 L10,30" stroke="rgba(0,0,0,.18)" stroke-width="1"/></svg>`;
-}
+ANIMAL_ANIM[1] = (R, dur) => {   // ねこ：うーんと伸びをして、にゃーお
+  R.part(".mouth", [{ transform: "scaleY(.05)" }, { transform: "scaleY(1)", offset: R.a() }, { transform: "scaleY(.8)", offset: R.b() }, { transform: "scaleY(.05)" }]);
+  R.part(".head", [{ transform: "rotate(0) translateY(0)" }, { transform: "rotate(-14deg) translateY(-3vmin)", offset: R.a() }, { transform: "rotate(-10deg) translateY(-2vmin)", offset: R.b() }, { transform: "rotate(0)" }]);
+  R.part(".tail", kfSwing(16, R.n(500), 6));
+  R.root([{ transform: "scale(1,1)" }, { transform: "scale(.96,1.07)", offset: R.a() }, { transform: "scale(.97,1.05)", offset: R.b() }, { transform: "scale(1,1)" }]);
+};
+ANIMAL_ANIM[2] = (R) => {   // うし：もぉ〜、と頭を下げて、ゆっくり上げる
+  R.part(".mouth", [{ transform: "scaleY(.05)" }, { transform: "scaleY(1)", offset: R.a() }, { transform: "scaleY(.9)", offset: R.b() }, { transform: "scaleY(.05)" }]);
+  R.part(".head", [{ transform: "rotate(0)" }, { transform: "rotate(10deg) translateY(2vmin)", offset: R.a() }, { transform: "rotate(-12deg) translateY(-2vmin)", offset: R.b() }, { transform: "rotate(0)" }]);
+  R.part(".tail", kfSwing(14, R.n(600), 0));
+  R.root([{ transform: "translateY(0)" }, { transform: "translateY(.8vmin)", offset: R.a() }, { transform: "translateY(0)" }]);
+};
+ANIMAL_ANIM[3] = (R) => {   // ぶた：ぶひぶひ、体を揺らして鼻を鳴らす
+  const n = R.n(300);
+  R.part(".mouth", kfMouth(n, .7));
+  R.part(".head", kfSwing(7, n, 0));
+  R.part(".tail", kfSwing(26, n * 2, 0));
+  R.root([{ transform: "rotate(0) scale(1)" }, ...Array.from({ length: n }, () => [{ transform: "rotate(-2.5deg) scale(1.02,.98)" }, { transform: "rotate(2.5deg) scale(.98,1.02)" }]).flat(), { transform: "rotate(0) scale(1)" }]);
+};
+ANIMAL_ANIM[4] = (R) => {   // にわとり：コケコッコー！羽を広げて胸を張る
+  const n = Math.max(2, R.n(330));
+  R.part(".head", [{ transform: "rotate(0)" }, { transform: "rotate(-20deg) translateY(-2vmin)", offset: R.a() }, { transform: "rotate(-24deg) translateY(-3vmin)", offset: R.b() }, { transform: "rotate(0)" }]);
+  R.part(".jaw", [{ transform: "rotate(0)" }, { transform: "rotate(26deg)", offset: R.a() }, { transform: "rotate(22deg)", offset: R.b() }, { transform: "rotate(0)" }]);
+  const wing = [{ transform: "rotate(0) scale(1)" }];
+  for (let i = 0; i < n; i++) wing.push({ transform: "rotate(-78deg) scale(1.25,1.3)" }, { transform: "rotate(-18deg) scale(1.05)" });
+  wing.push({ transform: "rotate(0) scale(1)" });
+  R.part(".wing", wing);
+  R.part(".tail", kfSwing(10, n, 0));
+  R.root([{ transform: "scale(1)" }, { transform: "scale(.97,1.06) translateY(-1.5vmin)", offset: R.a() }, { transform: "scale(.97,1.06) translateY(-1.5vmin)", offset: R.b() }, { transform: "scale(1)" }]);
+};
+ANIMAL_ANIM[5] = (R) => {   // ひつじ：めぇ〜、震える声でぴょんぴょん
+  const n = R.n(160);
+  R.part(".mouth", kfMouth(Math.max(2, Math.round(n / 3)), .9));
+  R.part(".head", kfSwing(5, n, 0), { easing: "linear" });
+  R.part(".body", [{ transform: "scale(1)" }, { transform: "scale(1.03)" }, { transform: "scale(1)" }], { iterations: Math.max(2, Math.round(R.n(380))) });
+  R.root(kfHop(3, Math.max(2, R.n(500))));
+};
+ANIMAL_ANIM[6] = (R) => {   // うま：ヒヒーン！前足を上げて立ち上がる
+  R.part(".mouth", [{ transform: "scaleY(.05)" }, { transform: "scaleY(1)", offset: R.a() }, { transform: "scaleY(.7)", offset: R.b() }, { transform: "scaleY(.05)" }]);
+  R.part(".head", [{ transform: "rotate(0)" }, { transform: "rotate(-16deg) translateY(-2vmin)", offset: R.a() }, { transform: "rotate(-10deg)", offset: R.b() }, { transform: "rotate(0)" }]);
+  R.part(".legF", [{ transform: "rotate(0)" }, { transform: "rotate(-55deg)", offset: R.a() }, { transform: "rotate(-40deg)", offset: R.b() }, { transform: "rotate(0)" }]);
+  R.part(".tail", kfSwing(14, R.n(450), 0));
+  R.root([{ transform: "rotate(0)", transformOrigin: "80% 100%" }, { transform: "rotate(-9deg)", transformOrigin: "80% 100%", offset: R.a() }, { transform: "rotate(-7deg)", transformOrigin: "80% 100%", offset: R.b() }, { transform: "rotate(0)", transformOrigin: "80% 100%" }]);
+};
+ANIMAL_ANIM[7] = (R) => {   // かえる：しゃがんで、ぴょーんとジャンプしながらげろげろ
+  const n = Math.max(1, Math.min(2, R.n(700)));
+  R.part(".mouth", kfMouth(n * 2, .8));
+  R.part(".belly", [{ transform: "scale(1)" }, ...Array.from({ length: n * 2 }, () => [{ transform: "scale(1.18)" }, { transform: "scale(1)" }]).flat()]);
+  R.part(".eye", [{ transform: "scale(1)" }, { transform: "scale(1.12)", offset: .5 }, { transform: "scale(1)" }]);
+  R.part(".legB", [{ transform: "rotate(0)" }, ...Array.from({ length: n }, (_, i) => [{ transform: `rotate(${i ? 0 : 0}deg) scale(1.1,.8)` }, { transform: "rotate(0) scale(.85,1.15)" }]).flat(), { transform: "rotate(0)" }]);
+  const kf = [{ transform: "translateY(0) scale(1)" }];
+  for (let i = 0; i < n; i++) kf.push({ transform: "translateY(1vmin) scale(1.08,.88)" }, { transform: "translateY(-14vmin) scale(.94,1.1)" }, { transform: "translateY(0) scale(1.06,.9)" });
+  kf.push({ transform: "translateY(0) scale(1)" });
+  R.root(kf);
+};
+ANIMAL_ANIM[8] = (R) => {   // あひる：ガーガー！首を突き出して羽をばたばた
+  const n = Math.max(2, R.n(330));
+  R.part(".jaw", [{ transform: "rotate(0)" }, ...Array.from({ length: n }, () => [{ transform: "rotate(24deg)" }, { transform: "rotate(0)" }]).flat()]);
+  R.part(".head", [{ transform: "translate(0,0)" }, ...Array.from({ length: n }, () => [{ transform: "translate(-2.5vmin,-1vmin) rotate(-6deg)" }, { transform: "translate(0,0)" }]).flat()]);
+  const wing = [{ transform: "rotate(0) scale(1)" }];
+  for (let i = 0; i < n * 2; i++) wing.push({ transform: "rotate(-62deg) scale(1.2,1.25)" }, { transform: "rotate(-12deg)" });
+  wing.push({ transform: "rotate(0) scale(1)" });
+  R.part(".wing", wing);
+  R.part(".tail", kfSwing(14, n * 2, 0));
+  R.root(kfHop(2.5, n));
+};
+ANIMAL_ANIM[9] = (R) => {   // らいおん：ガオー！頭を上げてたてがみを逆立て、体を震わせる
+  R.part(".mouth", [{ transform: "scaleY(.05)" }, { transform: "scaleY(1.4)", offset: R.a() }, { transform: "scaleY(1.25)", offset: R.b() }, { transform: "scaleY(.05)" }]);
+  R.part(".head", [{ transform: "rotate(0)" }, { transform: "rotate(-14deg) translateY(-2vmin)", offset: R.a() }, { transform: "rotate(-10deg) translateY(-1vmin)", offset: R.b() }, { transform: "rotate(0)" }]);
+  R.part(".mane", [{ transform: "scale(1)" }, ...Array.from({ length: R.n(120) }, (_, i) => ({ transform: `scale(${i % 2 ? 1.1 : 1.04})` })), { transform: "scale(1)" }], { easing: "linear" });
+  R.part(".tail", kfSwing(18, R.n(380), 0));
+  R.root([{ transform: "translateX(0) scale(1)" }, ...Array.from({ length: Math.max(4, R.n(90)) }, (_, i) => ({ transform: `translateX(${i % 2 ? .8 : -.8}vmin) scale(1.04)` })), { transform: "translateX(0) scale(1)" }], { easing: "linear" });
+};
 
-function ensureAnimalFx() {
-  const stage = document.getElementById("animal-stage");
-  if (stage.querySelector(".wing")) return;
-  ["l", "r"].forEach(side => {
-    const w = document.createElement("div");
-    w.className = "wing " + side;
-    stage.insertBefore(w, stage.firstChild);   // 動物の後ろに置く
-  });
-}
 function playAnimalMotion(idx, ms) {
-  ensureAnimalFx();
   const stage = document.getElementById("animal-stage");
   const elEmo = document.getElementById("animal-emoji");
-  const dur = Math.max(500, ms);
+  const dur = Math.max(600, ms);
   if (!elEmo.animate) return;                      // 古いブラウザでは動きなし（音だけ）
-  // 連打に備えて、前の動き・羽ばたき・おんぷ・羽毛を止める
-  elEmo.getAnimations().forEach(a => a.cancel());
-  stage.querySelectorAll(".wing").forEach(w => w.getAnimations().forEach(a => a.cancel()));
-  stage.querySelectorAll(".note-fx, .feather-fx").forEach(n => n.remove());
-  elEmo.animate(
-    (ANIMAL_MOTIONS[idx] || ["none", "scale(1.2)", "none"]).map(t => ({ transform: t })),
-    { duration: dur, easing: "ease-in-out" });
-  // 羽ばたき：閉じる(10°) ⇔ 大きく広げる(75°) を繰り返す
-  const colors = ANIMAL_WINGS[idx];
-  if (colors) {
-    stage.querySelectorAll(".wing").forEach(w => {
-      w.innerHTML = wingSvg(colors);
-      // 左の羽は時計回りで外へ、右の羽は反時計回りで外へ開く
-      const sg = w.classList.contains("l") ? 1 : -1;
-      const flaps = Math.max(2, Math.round(dur / 340));
-      const pose = (deg, sc, sk, op, ease) => ({
-        opacity: op, easing: ease,
-        transform: `rotate(${sg * deg}deg) scale(${sc}) skewY(${sg * sk}deg)`,
-      });
-      // たたむ → 勢いよく上へ大きく広げる（ぐっと伸びる）→ 素早く打ち下ろす、を繰り返す
-      const kf = [pose(6, .85, 0, 0, "ease-out")];
-      for (let i = 0; i < flaps; i++) {
-        kf.push(pose(50, 1.1, 4, 1, "cubic-bezier(.5,0,.9,.6)"));   // 上げ: 最後に加速して打ち下ろし
-        kf.push(pose(14, .95, -3, 1, "ease-out"));
-      }
-      kf.push(pose(8, .9, 0, 1, "ease-in"));
-      kf.push(pose(6, .85, 0, 0, "linear"));
-      w.animate(kf, { duration: dur });
-    });
-    // 羽ばたきで抜けた羽がひらひら舞い落ちる
-    for (let i = 0; i < 7; i++) {
-      const f = document.createElement("div");
-      f.className = "feather-fx";
-      f.innerHTML = featherSvg(colors[2]);
-      const side = i % 2 ? 1 : -1;
-      f.style.left = (50 + side * (22 + Math.random() * 16)) + "%";
-      f.style.top = (30 + Math.random() * 15) + "%";
-      stage.appendChild(f);
-      const dx = side * (4 + Math.random() * 10), r = (Math.random() - .5) * 200;
-      const an = f.animate([
-        { opacity: 0, transform: "translate(0,0) rotate(0deg)" },
-        { opacity: 1, transform: `translate(${dx * .5}vmin,6vmin) rotate(${r * .4}deg)`, offset: .2 },
-        { opacity: 1, transform: `translate(${-dx * .3}vmin,16vmin) rotate(${r * .8}deg)`, offset: .6 },
-        { opacity: 0, transform: `translate(${dx * .6}vmin,28vmin) rotate(${r}deg)` },
-      ], { duration: dur * 1.2, delay: i * dur * 0.09, easing: "ease-in-out", fill: "backwards" });
-      an.onfinish = () => f.remove();
-    }
+  // 連打に備えて、前の動き・おんぷを止める
+  elEmo.getAnimations({ subtree: true }).forEach(an => an.cancel());
+  stage.querySelectorAll(".note-fx").forEach(n => n.remove());
+  const fn = ANIMAL_ANIM[idx];
+  if (fn) {
+    try { fn(mkRunner(elEmo, dur), dur); } catch (err) { console.warn("[animal] anim failed:", err); }
   }
   // 鳴き声の「おんぷ」が上にふわっと出る
   for (let i = 0; i < 4; i++) {
@@ -2255,12 +2490,12 @@ function playAnimalMotion(idx, ms) {
     n.textContent = ["🎵", "🎶"][i % 2];
     n.style.left = (30 + Math.random() * 40) + "%";
     stage.appendChild(n);
-    const a = n.animate([
+    const an = n.animate([
       { opacity: 0, transform: "translate(0,0) scale(.6)" },
       { opacity: 1, transform: `translate(${(i % 2 ? 1 : -1) * 10}vmin,-14vmin) scale(1)`, offset: .3 },
       { opacity: 0, transform: `translate(${(i % 2 ? 1 : -1) * 16}vmin,-30vmin) scale(1.1)` },
     ], { duration: dur * 0.9, delay: i * dur * 0.12, easing: "ease-out", fill: "backwards" });
-    a.onfinish = () => n.remove();
+    an.onfinish = () => n.remove();
   }
 }
 let animalSwitchTimer = null;   // 3 回タップ後に次の動物へ切り替えるタイマー
@@ -2326,14 +2561,14 @@ function setupAnimalTap() {
         30);
       animalTapCount++;
       // 3 回目以降は、最後のタップの鳴き声が終わってから次の動物へ（連打中は切り替えない）
-      if (animalTapCount >= 3) {
-        if (animalSwitchTimer) clearTimeout(animalSwitchTimer);
+      if (animalTapCount >= 3 && !animalSwitchTimer) {
+        // 3 回目のタップから最長 1.1 秒で次の動物へ（連打を続けていても替わる）
         animalSwitchTimer = setTimeout(() => {
           animalSwitchTimer = null;
           animalTapCount = 0;
           animalIndex = (animalIndex + 1) % SoundKit.animals.length;
           renderAnimal();
-        }, dur + 150);
+        }, Math.min(dur + 150, 1100));
       }
     } else {
       // 背景タップ → 効果音だけ鳴らして次の動物へ
