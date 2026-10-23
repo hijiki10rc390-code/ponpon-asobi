@@ -160,15 +160,18 @@
   #animal-emoji { position: relative; z-index: 2; }
   #animal-stage .wing {
     position: absolute;
-    top: 36%;
-    width: 22vmin; height: 36vmin;
-    box-shadow: inset 0 0 0 .6vmin rgba(0,0,0,.18), 0 .8vmin 0 rgba(0,0,0,.08);
+    top: 30%;
+    width: 24vmin; height: 38vmin;
     opacity: 0;
     z-index: 1;
     pointer-events: none;
+    filter: drop-shadow(0 .8vmin .8vmin rgba(0,0,0,.18));
   }
-  #animal-stage .wing.l { left: -6vmin;  transform-origin: 100% 15%; border-radius: 80% 20% 50% 50%; }
-  #animal-stage .wing.r { right: -6vmin; transform-origin: 0% 15%;   border-radius: 20% 80% 50% 50%; }
+  #animal-stage .wing svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  #animal-stage .wing.l { left: -12vmin;  transform-origin: 100% 12%; }
+  #animal-stage .wing.l svg { transform: scaleX(-1); }
+  #animal-stage .wing.r { right: -12vmin; transform-origin: 0% 12%; }
+  #animal-stage .feather-fx { position: absolute; width: 5vmin; height: 8vmin; pointer-events: none; z-index: 3; }
   #animal-stage .note-fx {
     position: absolute; top: 0;
     font-size: 9vmin; line-height: 1;
@@ -1163,12 +1166,16 @@ const SoundKit = (() => {
     });
   }
   // 録音を使わず合成音で鳴らす動物の番号。らいおん(9)は録音が「ガオー」と違うため合成音。
-  const SYNTH_ONLY = new Set([9]);
+  const SYNTH_ONLY = new Set();   // 録音を使わず合成音にする動物の番号（今は無し。合成音は機械的・ノイズ状だった）
+  let animalSrc = null;           // いま鳴っている鳴き声（連打されたら止めて鳴らし直す）
   function playAnimalSample(idx) {
     if (SYNTH_ONLY.has(idx)) return false;
     const buf = animalBuffers[idx];
     if (!buf) return false;
+    if (animalSrc) { try { animalSrc.stop(); } catch (_) { /* 終了済み */ } animalSrc = null; }
     const src = ctx.createBufferSource();
+    animalSrc = src;
+    src.onended = () => { if (animalSrc === src) animalSrc = null; };
     src.buffer = buf;
     src.playbackRate.value = 0.97 + Math.random() * 0.07;   // 毎回ほんの少し違う高さ
     const g = ctx.createGain(); g.gain.value = ANIMAL_SAMPLE_GAIN;
@@ -1186,7 +1193,10 @@ const SoundKit = (() => {
     ensureRunning();
     // 鳴き声の最長は lion/chicken ≒ 3s。acquireVoice 内の setTimeout が自動で解放するので、手動の releaseVoice は呼ばない
     const sb = SYNTH_ONLY.has(idx) ? null : animalBuffers[idx];
-    if (!acquireVoice(sb ? sb.duration * 1000 + 100 : 1200)) return 0;
+    if (sb) {
+      if (ctx && master && playAnimalSample(idx)) return sb.duration * 1000;
+    }
+    if (!acquireVoice(1200)) return 0;
     if (ctx && master && playAnimalSample(idx)) return sb.duration * 1000;   // 録音が読めていればそれを鳴らす。未読込なら下の合成音にフォールバック
     // 動物ごとの音量補正（フォルマント並列後の実測値で揃えた）。master を一時的に差し替えて鳴らす
     if (!ctx || !master) return 0;
@@ -2140,14 +2150,40 @@ const ANIMAL_MOTIONS = [
   /* ねこ   */ ["none", "scale(.92,1.15) translateY(-3vmin)", "scale(.92,1.15) translateY(-3vmin) rotate(-8deg)", "scale(1.05,.95) rotate(6deg)", "none"],
   /* うし   */ ["none", "rotate(9deg) translateY(2vmin)", "rotate(-7deg) translateY(-2vmin)", "rotate(6deg) translateY(1vmin)", "none"],
   /* ぶた   */ ["none", "rotate(-7deg) scale(1.05)", "rotate(7deg) scale(.97)", "rotate(-7deg) scale(1.05)", "rotate(7deg) scale(.97)", "none"],
-  /* にわとり */ ["none", "scale(.95,1.15) translateY(-6vmin) rotate(-10deg)", "scale(.95,1.15) translateY(-6vmin) rotate(-14deg)", "scale(.95,1.15) translateY(-6vmin) rotate(-10deg)", "none"],
+  /* にわとり */ ["none", "scale(.94,1.14) translateY(-6vmin) rotate(-12deg)", "scale(1.02,1.04) translateY(-2vmin) rotate(6deg)", "scale(.94,1.16) translateY(-7vmin) rotate(-16deg)", "scale(1.02,1.04) translateY(-2vmin) rotate(5deg)", "scale(.95,1.12) translateY(-5vmin) rotate(-10deg)", "none"],
   /* ひつじ */ ["none", "translateY(-5vmin) rotate(-5deg)", "translateY(0)", "translateY(-5vmin) rotate(5deg)", "none"],
   /* うま   */ ["none", "rotate(-14deg) translateY(-4vmin) scale(1.08)", "rotate(-18deg) translateY(-5vmin) scale(1.1)", "rotate(-8deg) scale(1.04)", "none"],
   /* かえる */ ["none", "scale(1.15,.82) translateY(3vmin)", "translateY(-16vmin) scale(.92,1.12)", "translateY(-16vmin) scale(.92,1.12)", "scale(1.15,.82) translateY(3vmin)", "none"],
   /* あひる */ ["none", "rotate(-8deg) translateY(-3vmin)", "rotate(8deg) translateY(-3vmin)", "rotate(-8deg) translateY(-3vmin)", "none"],
   /* らいおん */ ["none", "scale(1.28) rotate(-5deg)", "scale(1.3) translate(1.2vmin,-.8vmin)", "scale(1.28) translate(-1.2vmin,.8vmin)", "scale(1.3) translate(1.2vmin,-.8vmin)", "scale(1.2) rotate(-3deg)", "none"],
 ];
-const ANIMAL_WINGS = { 4: "#fffdf8", 8: "#8a6a4f" };   // 羽ばたく動物（にわとり・あひる）: 羽の色
+// 羽ばたく動物（にわとり・あひる）: 羽の3層の色 [風切羽(奥), 中雨覆, 小雨覆(手前)]
+const ANIMAL_WINGS = {
+  4: ["#cdbfdc", "#e4dbee", "#fbf8ff"],
+  8: ["#5a4331", "#8a6a4f", "#b99572"],
+};
+// 羽の絵（右の羽。左は CSS で反転）。付け根は左上、先は右下に向かう。3 層の羽を重ねて羽毛の段を出す
+function wingSvg(c) {
+  return `<svg viewBox="0 0 100 160" aria-hidden="true">
+    <defs>
+      <linearGradient id="wg0" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c[0]}"/><stop offset="1" stop-color="${c[0]}" stop-opacity=".85"/></linearGradient>
+      <linearGradient id="wg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c[1]}"/><stop offset="1" stop-color="${c[0]}"/></linearGradient>
+      <linearGradient id="wg2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c[2]}"/><stop offset="1" stop-color="${c[1]}"/></linearGradient>
+    </defs>
+    <g stroke="rgba(0,0,0,.14)" stroke-width="1.4" stroke-linejoin="round">
+      <path fill="url(#wg0)" d="M6,16 C40,-2 88,18 97,84 C99,112 92,138 82,154 C78,136 72,128 66,130 C62,144 54,154 46,158 C44,140 38,128 32,128 C28,142 20,152 12,154 C8,120 2,70 6,16Z"/>
+      <path fill="url(#wg1)" d="M6,16 C38,4 80,22 87,70 C89,92 84,108 76,118 C72,108 66,104 60,108 C56,120 50,126 42,128 C40,114 34,108 28,110 C24,120 18,124 12,124 C8,96 3,54 6,16Z"/>
+      <path fill="url(#wg2)" d="M6,16 C32,8 66,24 72,50 C68,50 64,54 62,60 C58,54 52,54 48,60 C44,52 38,52 34,60 C30,52 24,54 20,62 C14,54 10,52 8,60 C4,46 3,30 6,16Z"/>
+    </g>
+    <g fill="none" stroke="rgba(0,0,0,.10)" stroke-width="1.2" stroke-linecap="round">
+      <path d="M30,64 C36,90 40,110 42,126"/><path d="M52,62 C60,86 64,104 66,122"/><path d="M72,56 C82,80 86,100 84,118"/>
+    </g>
+  </svg>`;
+}
+// 抜け落ちて舞う羽
+function featherSvg(color) {
+  return `<svg viewBox="0 0 20 32" width="100%" height="100%"><path d="M10,1 C20,8 20,22 10,31 C0,22 0,8 10,1Z" fill="${color}" stroke="rgba(0,0,0,.15)" stroke-width="1"/><path d="M10,4 L10,30" stroke="rgba(0,0,0,.18)" stroke-width="1"/></svg>`;
+}
 
 function ensureAnimalFx() {
   const stage = document.getElementById("animal-stage");
@@ -2164,24 +2200,54 @@ function playAnimalMotion(idx, ms) {
   const elEmo = document.getElementById("animal-emoji");
   const dur = Math.max(500, ms);
   if (!elEmo.animate) return;                      // 古いブラウザでは動きなし（音だけ）
+  // 連打に備えて、前の動き・羽ばたき・おんぷ・羽毛を止める
+  elEmo.getAnimations().forEach(a => a.cancel());
+  stage.querySelectorAll(".wing").forEach(w => w.getAnimations().forEach(a => a.cancel()));
+  stage.querySelectorAll(".note-fx, .feather-fx").forEach(n => n.remove());
   elEmo.animate(
     (ANIMAL_MOTIONS[idx] || ["none", "scale(1.2)", "none"]).map(t => ({ transform: t })),
     { duration: dur, easing: "ease-in-out" });
   // 羽ばたき：閉じる(10°) ⇔ 大きく広げる(75°) を繰り返す
-  const color = ANIMAL_WINGS[idx];
-  stage.querySelectorAll(".wing").forEach(w => {
-    if (!color) return;
-    w.style.background = color;
-    const sg = w.classList.contains("l") ? -1 : 1;
-    const flaps = Math.max(2, Math.round(dur / 380));
-    const kf = [{ opacity: 1, transform: `rotate(${sg * 10}deg)` }];
-    for (let i = 0; i < flaps; i++) {
-      kf.push({ opacity: 1, transform: `rotate(${sg * 75}deg)` });
-      kf.push({ opacity: 1, transform: `rotate(${sg * 15}deg)` });
+  const colors = ANIMAL_WINGS[idx];
+  if (colors) {
+    stage.querySelectorAll(".wing").forEach(w => {
+      w.innerHTML = wingSvg(colors);
+      // 左の羽は時計回りで外へ、右の羽は反時計回りで外へ開く
+      const sg = w.classList.contains("l") ? 1 : -1;
+      const flaps = Math.max(2, Math.round(dur / 340));
+      const pose = (deg, sc, sk, op, ease) => ({
+        opacity: op, easing: ease,
+        transform: `rotate(${sg * deg}deg) scale(${sc}) skewY(${sg * sk}deg)`,
+      });
+      // たたむ → 勢いよく上へ大きく広げる（ぐっと伸びる）→ 素早く打ち下ろす、を繰り返す
+      const kf = [pose(6, .85, 0, 0, "ease-out")];
+      for (let i = 0; i < flaps; i++) {
+        kf.push(pose(50, 1.1, 4, 1, "cubic-bezier(.5,0,.9,.6)"));   // 上げ: 最後に加速して打ち下ろし
+        kf.push(pose(14, .95, -3, 1, "ease-out"));
+      }
+      kf.push(pose(8, .9, 0, 1, "ease-in"));
+      kf.push(pose(6, .85, 0, 0, "linear"));
+      w.animate(kf, { duration: dur });
+    });
+    // 羽ばたきで抜けた羽がひらひら舞い落ちる
+    for (let i = 0; i < 7; i++) {
+      const f = document.createElement("div");
+      f.className = "feather-fx";
+      f.innerHTML = featherSvg(colors[2]);
+      const side = i % 2 ? 1 : -1;
+      f.style.left = (50 + side * (22 + Math.random() * 16)) + "%";
+      f.style.top = (30 + Math.random() * 15) + "%";
+      stage.appendChild(f);
+      const dx = side * (4 + Math.random() * 10), r = (Math.random() - .5) * 200;
+      const an = f.animate([
+        { opacity: 0, transform: "translate(0,0) rotate(0deg)" },
+        { opacity: 1, transform: `translate(${dx * .5}vmin,6vmin) rotate(${r * .4}deg)`, offset: .2 },
+        { opacity: 1, transform: `translate(${-dx * .3}vmin,16vmin) rotate(${r * .8}deg)`, offset: .6 },
+        { opacity: 0, transform: `translate(${dx * .6}vmin,28vmin) rotate(${r}deg)` },
+      ], { duration: dur * 1.2, delay: i * dur * 0.09, easing: "ease-in-out", fill: "backwards" });
+      an.onfinish = () => f.remove();
     }
-    kf.push({ opacity: 0, transform: `rotate(${sg * 10}deg)` });
-    w.animate(kf, { duration: dur, easing: "ease-in-out" });
-  });
+  }
   // 鳴き声の「おんぷ」が上にふわっと出る
   for (let i = 0; i < 4; i++) {
     const n = document.createElement("div");
@@ -2197,7 +2263,7 @@ function playAnimalMotion(idx, ms) {
     a.onfinish = () => n.remove();
   }
 }
-let animalBusyUntil = 0;     // 鳴き終わるまで次のタップを受け付けない（performance.now() 基準）
+let animalSwitchTimer = null;   // 3 回タップ後に次の動物へ切り替えるタイマー
 function triggerAnimalAnim(kind) {
   animalAnim.active = true;
   animalAnim.kind = kind;
@@ -2251,22 +2317,27 @@ function setupAnimalTap() {
     const cv = document.getElementById("animal-canvas");
     const r = cv.getBoundingClientRect();
     if (isEmoji) {
-      // 鳴き声の長さだけ動く。その間は次のタップを受け付けない
+      // 連打OK：前の声と動きを止めて、押すたびに鳴き直す
       const ms = SoundKit.playAnimal(animalIndex);
       const dur = ms > 0 ? ms : 600;
-      animalBusyUntil = performance.now() + dur;
       playAnimalMotion(animalIndex, dur);
       spawnParticles(x - r.left, y - r.top,
         ["#ffd166","#ef476f","#06d6a0","#118ab2","#fff"][animalIndex % 5],
         30);
       animalTapCount++;
+      // 3 回目以降は、最後のタップの鳴き声が終わってから次の動物へ（連打中は切り替えない）
       if (animalTapCount >= 3) {
-        animalTapCount = 0;
-        animalIndex = (animalIndex + 1) % SoundKit.animals.length;
-        setTimeout(renderAnimal, dur + 150);   // 鳴き終わってから次の動物へ
+        if (animalSwitchTimer) clearTimeout(animalSwitchTimer);
+        animalSwitchTimer = setTimeout(() => {
+          animalSwitchTimer = null;
+          animalTapCount = 0;
+          animalIndex = (animalIndex + 1) % SoundKit.animals.length;
+          renderAnimal();
+        }, dur + 150);
       }
     } else {
       // 背景タップ → 効果音だけ鳴らして次の動物へ
+      if (animalSwitchTimer) { clearTimeout(animalSwitchTimer); animalSwitchTimer = null; }
       SoundKit.playTwinkle();
       animalTapCount = 0;
       animalIndex = (animalIndex + 1) % SoundKit.animals.length;
@@ -2283,7 +2354,6 @@ function setupAnimalTap() {
     e.preventDefault();
     // 手のひら相当の接触は無視（複数本指のタップや通常のタップはそのまま）
     if (isPalmTouch(e)) return;
-    if (performance.now() < animalBusyUntil) return;   // 鳴いている間は待つ（連打で鳴き声が重ならない）
     const {x, y} = getXY(e);
     const r = elEmo.getBoundingClientRect();
     const inside = x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
@@ -2748,7 +2818,7 @@ function pickRandomVehicleKind() {
 
 // 乗り物の状態: x=中心の横位置(px) / y=待機位置からの縦のずれ(px)。vx,vy=慣性の速さ(px/秒)
 const VEHICLE_FRICTION = 1.7;      // 大きいほど早く止まる（1/秒）
-const VEHICLE_FLING_MAX = 2600;    // 投げた速さの上限(px/秒)
+const VEHICLE_FLING_MAX = 3200;    // 投げた速さの上限(px/秒)
 const VEHICLE_SPEED_FULL = 1500;   // この速さで音が最大(px/秒)
 let vehicleZ = 10;
 let vehicleLastTick = 0;
@@ -2784,7 +2854,8 @@ function attachVehicleHandlers(v) {
   const el = v.el;
   el.addEventListener("pointerdown", e => {
     e.preventDefault();
-    if (isPalmTouch(e) || v.held) return;
+    if (isPalmTouch(e) || v.held || v.hidden) return;
+    v.enter = null;                              // 入ってくる途中でもつかめる
     try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
     try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
     try { el.setPointerCapture(e.pointerId); } catch (_) { /* 取得失敗は無視 */ }
@@ -2844,6 +2915,7 @@ function buildVehicles() {
       vx: 0, vy: 0, dir: 1,
       held: false, pid: -1, gx: 0, gy: 0, hist: [], loop: null,
       slotX: 0, slotY: 0, homeTop: 0, size: 100, moved: false,
+      hidden: false, respawnAt: 0, enter: null,   // 画面外に出て消えた→別の車が入ってくる
     };
     runningVehicles.push(v);
     attachVehicleHandlers(v);
@@ -2874,6 +2946,8 @@ function layoutVehicles() {
     v.slotX = isLandscape ? W * [0.25, 0.5, 0.75][i] : W * 0.5;
     v.el.style.top = v.homeTop + "px";
     v.el.style.fontSize = cellSize + "px";
+    if (v.enter) v.enter.toX = v.slotX;
+    if (v.hidden || v.enter) continue;
     if (!v.moved && !v.held) { v.x = v.slotX; v.y = 0; }
     const bd = vehicleBounds(v);
     v.x = Math.max(bd.xMin, Math.min(bd.xMax, v.x));
@@ -2907,11 +2981,61 @@ function buildClouds() {
 }
 
 // 毎フレーム: 離した乗り物の慣性移動と、走行音の追従
+function vehicleLeave(v, now) {
+  vehicleStopLoop(v);
+  v.vx = v.vy = 0;
+  v.hidden = true;
+  v.respawnAt = now + 700;
+  v.el.style.visibility = "hidden";
+  v.el.style.pointerEvents = "none";
+}
+// 画面にいない種類の車を選ぶ（3 台が重複しないように）
+function vehicleEnter(v, now) {
+  const used = runningVehicles.filter(o => o !== v && !o.hidden).map(o => o.kind);
+  const cand = [];
+  for (let k = 0; k < SoundKit.vehicles.length; k++) if (!used.includes(k) && k !== v.kind) cand.push(k);
+  v.kind = cand.length ? cand[Math.floor(Math.random() * cand.length)] : pickRandomVehicleKind();
+  v.el.textContent = SoundKit.vehicles[v.kind].emo;
+  const W = window.innerWidth;
+  const fromLeft = Math.random() < 0.5;
+  v.dir = fromLeft ? 1 : -1;
+  v.y = 0;
+  v.moved = false;
+  v.enter = {
+    t0: now, dur: 1800,
+    fromX: fromLeft ? -v.size * 0.7 : W + v.size * 0.7,
+    toX: v.slotX,
+  };
+  v.x = v.enter.fromX;
+  v.hidden = false;
+  v.el.style.visibility = "visible";
+  v.el.style.pointerEvents = "auto";
+  vehicleStopLoop(v);
+  try { v.loop = SoundKit.createVehicleLoop(v.kind); } catch (err) { console.warn("[audio] vehicle loop failed:", err); }
+  if (v.kind !== 3 && v.kind !== 4) SoundKit.playVehicleSound(v.kind);
+  vehicleRender(v);
+}
 function tickVehicleRuns(now) {
   const dt = Math.min(0.05, vehicleLastTick ? (now - vehicleLastTick) / 1000 : 0.016);
   vehicleLastTick = now;
+  const W = window.innerWidth;
   for (const v of runningVehicles) {
     let sp = 0;
+    if (v.hidden) {
+      if (now >= v.respawnAt) vehicleEnter(v, now);
+      continue;
+    }
+    if (v.enter) {
+      // 画面の外から待機位置まで自分で走ってくる（だんだんゆっくり止まる）
+      const u = Math.min(1, (now - v.enter.t0) / v.enter.dur);
+      const e = 1 - Math.pow(1 - u, 2);
+      v.x = v.enter.fromX + (v.enter.toX - v.enter.fromX) * e;
+      vehicleRender(v);
+      sp = (1 - u) * VEHICLE_SPEED_FULL * 0.6;
+      if (u >= 1) { v.enter = null; vehicleStopLoop(v); }
+      if (v.loop) v.loop.update(Math.min(1, sp / VEHICLE_SPEED_FULL));
+      continue;
+    }
     if (v.held) {
       const fv = vehicleDragVelocity(v, now);
       sp = Math.hypot(fv.vx, fv.vy);
@@ -2922,11 +3046,14 @@ function tickVehicleRuns(now) {
       const bd = vehicleBounds(v);
       v.x += v.vx * dt;
       v.y += v.vy * dt;
-      // 壁にぶつかったら、少し勢いを失ってはね返る
-      if (v.x < bd.xMin) { v.x = bd.xMin; v.vx = Math.abs(v.vx) * 0.6; }
-      if (v.x > bd.xMax) { v.x = bd.xMax; v.vx = -Math.abs(v.vx) * 0.6; }
-      if (v.y < bd.yMin) { v.y = bd.yMin; v.vy = Math.abs(v.vy) * 0.6; }
-      if (v.y > bd.yMax) { v.y = bd.yMax; v.vy = -Math.abs(v.vy) * 0.6; }
+      // 上下は地面の範囲で止まる（はね返らない）。左右は画面の外へ出られる
+      if (v.y < bd.yMin) { v.y = bd.yMin; v.vy = 0; }
+      if (v.y > bd.yMax) { v.y = bd.yMax; v.vy = 0; }
+      // 完全に画面の外へ出たら消す。少ししたら別の車が画面の外から入ってくる
+      if (v.x < -v.size * 0.7 || v.x > W + v.size * 0.7) {
+        vehicleLeave(v, now);
+        continue;
+      }
       const f = Math.exp(-VEHICLE_FRICTION * dt);
       v.vx *= f; v.vy *= f;
       sp = Math.hypot(v.vx, v.vy);
