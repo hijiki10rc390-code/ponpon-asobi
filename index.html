@@ -71,7 +71,8 @@
        - 横方向制約: 3 枚 + gap 2 つ ≤ 100vw
        - 縦方向制約: 2 枚 + gap 1 つ ≤ (100vh - 上下余白合計 260px)
        → 上下の固定余白が 200px / 60px なので、合計 260px で計算する。 */
-    --card: min(40vmin, calc((100vw - 6vmin) / 3), calc((100vh - 260px - 3vmin) / 2));
+    /* カードは8枚（4列×2行）。横は padding(8vw) と gap(3×3vmin) を引いて4等分 */
+    --card: min(40vmin, calc((92vw - 9vmin) / 4), calc((100vh - 260px - 3vmin) / 2));
   }
   .home-card {
     /* カード 1 辺は .wrap の --card (25〜30vmin 相当)。
@@ -155,6 +156,24 @@
     z-index: 10;
     will-change: transform;
   }
+  /* 羽ばたき用の羽（にわとり・あひる）。普段は見えない */
+  #animal-emoji { position: relative; z-index: 2; }
+  #animal-stage .wing {
+    position: absolute;
+    top: 36%;
+    width: 22vmin; height: 36vmin;
+    box-shadow: inset 0 0 0 .6vmin rgba(0,0,0,.18), 0 .8vmin 0 rgba(0,0,0,.08);
+    opacity: 0;
+    z-index: 1;
+    pointer-events: none;
+  }
+  #animal-stage .wing.l { left: -6vmin;  transform-origin: 100% 15%; border-radius: 80% 20% 50% 50%; }
+  #animal-stage .wing.r { right: -6vmin; transform-origin: 0% 15%;   border-radius: 20% 80% 50% 50%; }
+  #animal-stage .note-fx {
+    position: absolute; top: 0;
+    font-size: 9vmin; line-height: 1;
+    pointer-events: none; z-index: 3;
+  }
   #animal-emoji {
     font-size: 60vmin;   /* 短辺の 6 割相当 */
     line-height: 1;
@@ -172,6 +191,16 @@
   /* ===== いろ ===== */
   #stage-color {
     background: #0b1020;
+  }
+
+  /* ===== いないいないばあ ===== */
+  #stage-peek {
+    background: linear-gradient(180deg, #fff1c9 0%, #ffd9b0 100%);
+  }
+
+  /* ===== つみき ===== */
+  #stage-blocks {
+    background: linear-gradient(180deg, #d8f3dc 0%, #b7e4c7 100%);
   }
 
   /* ===== おとあそび（鍵盤） ===== */
@@ -328,6 +357,7 @@
   #vehicle-area {
     position: absolute;
     inset: 0;
+    z-index: 1;                 /* 独立した重なり順にして、乗り物が🏠(z-index:30)の上に出ないようにする */
     pointer-events: none;       /* 乗っていない領域は親に流さない */
   }
   .vehicle {
@@ -471,6 +501,8 @@
     <button class="home-card" data-mode="music" aria-label="おとあそび"></button>
     <button class="home-card" data-mode="vehicle" aria-label="のりもの"></button>
     <button class="home-card" data-mode="draw" aria-label="おえかき"></button>
+    <button class="home-card" data-mode="peek" aria-label="いないいないばあ"></button>
+    <button class="home-card" data-mode="blocks" aria-label="つみき"></button>
   </div>
 </section>
 
@@ -512,6 +544,18 @@
   <button class="home-btn" aria-label="ホームへ"><canvas></canvas>🏠</button>
   <canvas class="mode-canvas" id="draw-canvas"></canvas>
   <button id="draw-clear-btn" aria-label="けす">🧽</button>
+</section>
+
+<!-- ========= いないいないばあ ========= -->
+<section id="stage-peek" class="stage">
+  <button class="home-btn" aria-label="ホームへ"><canvas></canvas>🏠</button>
+  <canvas class="mode-canvas" id="peek-canvas"></canvas>
+</section>
+
+<!-- ========= つみき ========= -->
+<section id="stage-blocks" class="stage">
+  <button class="home-btn" aria-label="ホームへ"><canvas></canvas>🏠</button>
+  <canvas class="mode-canvas" id="blocks-canvas"></canvas>
 </section>
 
 <!-- ========= おしまい ========= -->
@@ -1118,7 +1162,10 @@ const SoundKit = (() => {
         .catch(err => console.warn("[audio] sample load failed:", name, err));
     });
   }
+  // 録音を使わず合成音で鳴らす動物の番号。らいおん(9)は録音が「ガオー」と違うため合成音。
+  const SYNTH_ONLY = new Set([9]);
   function playAnimalSample(idx) {
+    if (SYNTH_ONLY.has(idx)) return false;
     const buf = animalBuffers[idx];
     if (!buf) return false;
     const src = ctx.createBufferSource();
@@ -1130,20 +1177,24 @@ const SoundKit = (() => {
     return true;
   }
 
+  // 合成音の長さ(ms)の目安（録音はバッファの長さを使う）
+  const SYNTH_MS = [450, 1000, 1300, 700, 1500, 1000, 1200, 900, 700, 1100];
+  // 鳴き声の長さ(ms)を返す。鳴らせなかったときは 0
   function playAnimal(idx) {
     const a = animals[idx];
-    if (!a) return;
+    if (!a) return 0;
     ensureRunning();
     // 鳴き声の最長は lion/chicken ≒ 3s。acquireVoice 内の setTimeout が自動で解放するので、手動の releaseVoice は呼ばない
-    const sb = animalBuffers[idx];
-    if (!acquireVoice(sb ? sb.duration * 1000 + 100 : 1200)) return;
-    if (ctx && master && playAnimalSample(idx)) return;   // 録音が読めていればそれを鳴らす。未読込なら下の合成音にフォールバック
+    const sb = SYNTH_ONLY.has(idx) ? null : animalBuffers[idx];
+    if (!acquireVoice(sb ? sb.duration * 1000 + 100 : 1200)) return 0;
+    if (ctx && master && playAnimalSample(idx)) return sb.duration * 1000;   // 録音が読めていればそれを鳴らす。未読込なら下の合成音にフォールバック
     // 動物ごとの音量補正（フォルマント並列後の実測値で揃えた）。master を一時的に差し替えて鳴らす
-    if (!ctx || !master) return;
+    if (!ctx || !master) return 0;
     const savedMaster = master;
     const bus = ctx.createGain(); bus.gain.value = a.vol || 1; bus.connect(savedMaster);
     master = bus;
     try { a.fn(); } finally { master = savedMaster; }   // 合成音（即時）のみ。読み上げは廃止。
+    return SYNTH_MS[idx] || 900;
   }
   function playPop()  {
     ensureRunning();
@@ -1344,6 +1395,129 @@ const SoundKit = (() => {
     { emo:"🚓", name:"パトカー", fn: hornPolice },
     { emo:"🚜", name:"トラクター", fn: hornTractor },
   ];
+
+  /* --------------- のりもの：走っている間ずっと鳴る音（車種別） ---------------
+     update(s) に速さ s(0〜1) を渡すと、音の高さ・大きさ・リズムが追従する。止まれば無音。
+     stop() で必ず片付ける（発振器と setTimeout を残さない）。 */
+  function createVehicleLoop(kind) {
+    ensureRunning();
+    if (!ctx || !master) return null;
+    const out = master;
+    const g = ctx.createGain();
+    g.gain.value = 0.0001;
+    g.connect(out);
+    const nodes = [];
+    let timer = null;
+    let speed = 0;
+    let stopped = false;
+    const set = (param, v, tc) => param.setTargetAtTime(v, ctx.currentTime, tc || 0.05);
+    function osc(type, f) {
+      const o = ctx.createOscillator();
+      o.type = type; o.frequency.value = f; o.start();
+      nodes.push(o);
+      return o;
+    }
+    function lowpass(f) {
+      const b = ctx.createBiquadFilter();
+      b.type = "lowpass"; b.frequency.value = f;
+      return b;
+    }
+    const moving = () => speed > 0.02;
+    let update = () => {};
+
+    if (kind === 0) {            // くるま：エンジンのうなり（速いほど高く）
+      const o = osc("sawtooth", 80);
+      o.connect(lowpass(650)).connect(g);
+      update = s => { set(o.frequency, 75 + s * 120); set(g.gain, s > 0.02 ? 0.10 + 0.10 * s : 0.0001); };
+    } else if (kind === 1) {     // バス：低くて太いディーゼル
+      const o = osc("sawtooth", 46);
+      const o2 = osc("square", 23);
+      o.connect(lowpass(380)).connect(g);
+      o2.connect(lowpass(200)).connect(g);
+      update = s => {
+        set(o.frequency, 44 + s * 55); set(o2.frequency, 22 + s * 27);
+        set(g.gain, s > 0.02 ? 0.13 + 0.10 * s : 0.0001);
+      };
+    } else if (kind === 2) {     // でんしゃ：ガタンゴトン（速いほど間隔が短い）
+      let flip = 0;
+      const tick = () => {
+        if (stopped) return;
+        if (moving()) {
+          const t = ctx.currentTime;
+          const lowTone = flip === 0;
+          const o = ctx.createOscillator();
+          const gg = ctx.createGain();
+          o.type = "sine";
+          o.frequency.setValueAtTime(lowTone ? 110 : 85, t);
+          o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+          gg.gain.setValueAtTime(0.0001, t);
+          gg.gain.exponentialRampToValueAtTime(0.35, t + 0.008);
+          gg.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+          o.connect(gg).connect(out);
+          o.start(t); o.stop(t + 0.16);
+          noiseBurst(t, 0.07, 0.22, lowTone ? 1500 : 1000);
+          flip ^= 1;
+        }
+        timer = setTimeout(tick, 440 - 300 * speed);
+      };
+      timer = setTimeout(tick, 0);
+      g.gain.value = 1;
+      update = s => { speed = s; };
+    } else if (kind === 3) {     // しょうぼうしゃ：ウーウー（なめらかに上下するサイレン）
+      const o = osc("sawtooth", 600);
+      o.connect(lowpass(2200)).connect(g);
+      let up = true;
+      const tick = () => {
+        if (stopped) return;
+        const t = ctx.currentTime;
+        o.frequency.cancelScheduledValues(t);
+        o.frequency.setValueAtTime(o.frequency.value, t);
+        o.frequency.linearRampToValueAtTime(up ? 920 : 560, t + 0.55);
+        up = !up;
+        timer = setTimeout(tick, 560);
+      };
+      tick();
+      update = s => { speed = s; set(g.gain, s > 0.02 ? 0.07 + 0.04 * s : 0.0001, 0.08); };
+    } else if (kind === 4) {     // パトカー：ピーポーピーポー（高低を交互に）
+      const o = osc("square", 880);
+      o.connect(lowpass(3000)).connect(g);
+      let hi = true;
+      const tick = () => {
+        if (stopped) return;
+        o.frequency.setValueAtTime(hi ? 880 : 660, ctx.currentTime);
+        hi = !hi;
+        timer = setTimeout(tick, 380);
+      };
+      tick();
+      update = s => { speed = s; set(g.gain, s > 0.02 ? 0.06 + 0.03 * s : 0.0001, 0.03); };
+    } else {                     // トラクター：ドッドッドッ（低い音を細かく刻む）
+      const o = osc("sawtooth", 58);
+      const am = ctx.createGain();
+      am.gain.value = 0.5;
+      const lfo = osc("sine", 9);
+      const depth = ctx.createGain();
+      depth.gain.value = 0.5;
+      lfo.connect(depth).connect(am.gain);
+      o.connect(lowpass(320)).connect(am).connect(g);
+      update = s => {
+        set(o.frequency, 55 + s * 35); set(lfo.frequency, 8 + s * 9);
+        set(g.gain, s > 0.02 ? 0.20 + 0.12 * s : 0.0001);
+      };
+    }
+    return {
+      update(s) { if (!stopped) update(s); },
+      stop() {
+        if (stopped) return;
+        stopped = true;
+        if (timer) { clearTimeout(timer); timer = null; }
+        const t = ctx.currentTime;
+        g.gain.cancelScheduledValues(t);
+        g.gain.setTargetAtTime(0.0001, t, 0.04);
+        nodes.forEach(o => { try { o.stop(t + 0.25); } catch (_) { /* ignore */ } });
+        setTimeout(() => { try { g.disconnect(); } catch (_) { /* ignore */ } }, 400);
+      },
+    };
+  }
   function playVehicleSound(kind) {
     const v = vehicles[kind];
     if (!v) return;
@@ -1356,7 +1530,7 @@ const SoundKit = (() => {
     playAnimal, playPop, playTwinkle, finishTone,
     noteForX, playNote, playNoteSmall,
     playMusicNote, musicScale,
-    playVehicleSound, vehicles,
+    playVehicleSound, createVehicleLoop, vehicles,
     animals,
   };
 })();
@@ -1616,6 +1790,8 @@ const stages = {
   music:   document.getElementById("stage-music"),
   vehicle: document.getElementById("stage-vehicle"),
   draw:    document.getElementById("stage-draw"),
+  peek:    document.getElementById("stage-peek"),
+  blocks:  document.getElementById("stage-blocks"),
   finish:  document.getElementById("stage-finish"),
 };
 let currentMode = "home";
@@ -1662,12 +1838,15 @@ function showMode(mode) {
     if (mode === "music")   initMusic();
     if (mode === "vehicle") initVehicle();
     if (mode === "draw")    initDraw();
+    if (mode === "peek")    initPeek();
+    if (mode === "blocks")  initBlocks();
     // finish は init 不要（DOM は静的）
   });
 
   // 新しいモードが「計測対象」なら開始
   if (mode === "animal" || mode === "balloon" || mode === "color" ||
-      mode === "music"  || mode === "vehicle" || mode === "draw") {
+      mode === "music"  || mode === "vehicle" || mode === "draw" ||
+      mode === "peek"   || mode === "blocks") {
     onEnterMode(performance.now());
   }
 }
@@ -1686,7 +1865,7 @@ function fadeThenFinish() {
 
 /* =====================================================================
    長押しボタン共通：1.5 秒長押しで進捗リング
-   - 🏠 と ⏱ の両方で使用（描画色は呼び出し側で指定可）
+   - ⏱ で使用（🏠 は単タップに変更済み。描画色は呼び出し側で指定可）
    - 既存の setupHomeButtons の中身を移植
    ===================================================================== */
 function setupHoldButton(btn, onLongPress, opts) {
@@ -1792,11 +1971,26 @@ function setupHoldButton(btn, onLongPress, opts) {
   btn.addEventListener("click", e => e.preventDefault());
 }
 
+// 🏠 は子供には長押しが難しいので、シングルタップでホームへ戻る（指を離した時に発火）。
+// ⏱（親用のタイマー設定）は誤操作防止のため従来どおり長押し（setupHoldButton）。
 function setupHomeButtons() {
   document.querySelectorAll(".home-btn").forEach(btn => {
-    setupHoldButton(btn, () => {
+    // 端末ごとにイベントの届き方が違う（iPad で pointerup が来ないことがある）ので、
+    // pointerup / touchend / click のどれか最初に来たものでホームへ戻る。
+    // ホームにいるときは何もしない（二重発火しても無害）。
+    const goHome = e => {
+      e.preventDefault();
+      if (currentMode === "home") return;
       showMode("home");
+    };
+    btn.addEventListener("pointerdown", e => {
+      e.preventDefault();
+      try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
+      try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
     });
+    btn.addEventListener("pointerup", goHome);
+    btn.addEventListener("touchend", goHome, {passive:false});
+    btn.addEventListener("click", goHome);
   });
 }
 
@@ -1938,6 +2132,72 @@ function renderAnimal() {
   const a = SoundKit.animals[animalIndex];
   document.getElementById("animal-emoji").textContent = a.emo;
 }
+
+/* ---- どうぶつの動き：鳴いている間、動物ごとに動く（ジャンプ・羽ばたき・のけぞり等） ---- */
+// transform のキーフレーム列。鳴き声の長さ全体に均等に割り当て、最後は元の姿勢に戻る
+const ANIMAL_MOTIONS = [
+  /* いぬ   */ ["translateY(0)", "translateY(-7vmin) rotate(-6deg)", "translateY(0)", "translateY(-7vmin) rotate(6deg)", "translateY(0)", "translateY(-5vmin) rotate(-4deg)", "translateY(0)"],
+  /* ねこ   */ ["none", "scale(.92,1.15) translateY(-3vmin)", "scale(.92,1.15) translateY(-3vmin) rotate(-8deg)", "scale(1.05,.95) rotate(6deg)", "none"],
+  /* うし   */ ["none", "rotate(9deg) translateY(2vmin)", "rotate(-7deg) translateY(-2vmin)", "rotate(6deg) translateY(1vmin)", "none"],
+  /* ぶた   */ ["none", "rotate(-7deg) scale(1.05)", "rotate(7deg) scale(.97)", "rotate(-7deg) scale(1.05)", "rotate(7deg) scale(.97)", "none"],
+  /* にわとり */ ["none", "scale(.95,1.15) translateY(-6vmin) rotate(-10deg)", "scale(.95,1.15) translateY(-6vmin) rotate(-14deg)", "scale(.95,1.15) translateY(-6vmin) rotate(-10deg)", "none"],
+  /* ひつじ */ ["none", "translateY(-5vmin) rotate(-5deg)", "translateY(0)", "translateY(-5vmin) rotate(5deg)", "none"],
+  /* うま   */ ["none", "rotate(-14deg) translateY(-4vmin) scale(1.08)", "rotate(-18deg) translateY(-5vmin) scale(1.1)", "rotate(-8deg) scale(1.04)", "none"],
+  /* かえる */ ["none", "scale(1.15,.82) translateY(3vmin)", "translateY(-16vmin) scale(.92,1.12)", "translateY(-16vmin) scale(.92,1.12)", "scale(1.15,.82) translateY(3vmin)", "none"],
+  /* あひる */ ["none", "rotate(-8deg) translateY(-3vmin)", "rotate(8deg) translateY(-3vmin)", "rotate(-8deg) translateY(-3vmin)", "none"],
+  /* らいおん */ ["none", "scale(1.28) rotate(-5deg)", "scale(1.3) translate(1.2vmin,-.8vmin)", "scale(1.28) translate(-1.2vmin,.8vmin)", "scale(1.3) translate(1.2vmin,-.8vmin)", "scale(1.2) rotate(-3deg)", "none"],
+];
+const ANIMAL_WINGS = { 4: "#fffdf8", 8: "#8a6a4f" };   // 羽ばたく動物（にわとり・あひる）: 羽の色
+
+function ensureAnimalFx() {
+  const stage = document.getElementById("animal-stage");
+  if (stage.querySelector(".wing")) return;
+  ["l", "r"].forEach(side => {
+    const w = document.createElement("div");
+    w.className = "wing " + side;
+    stage.insertBefore(w, stage.firstChild);   // 動物の後ろに置く
+  });
+}
+function playAnimalMotion(idx, ms) {
+  ensureAnimalFx();
+  const stage = document.getElementById("animal-stage");
+  const elEmo = document.getElementById("animal-emoji");
+  const dur = Math.max(500, ms);
+  if (!elEmo.animate) return;                      // 古いブラウザでは動きなし（音だけ）
+  elEmo.animate(
+    (ANIMAL_MOTIONS[idx] || ["none", "scale(1.2)", "none"]).map(t => ({ transform: t })),
+    { duration: dur, easing: "ease-in-out" });
+  // 羽ばたき：閉じる(10°) ⇔ 大きく広げる(75°) を繰り返す
+  const color = ANIMAL_WINGS[idx];
+  stage.querySelectorAll(".wing").forEach(w => {
+    if (!color) return;
+    w.style.background = color;
+    const sg = w.classList.contains("l") ? -1 : 1;
+    const flaps = Math.max(2, Math.round(dur / 380));
+    const kf = [{ opacity: 1, transform: `rotate(${sg * 10}deg)` }];
+    for (let i = 0; i < flaps; i++) {
+      kf.push({ opacity: 1, transform: `rotate(${sg * 75}deg)` });
+      kf.push({ opacity: 1, transform: `rotate(${sg * 15}deg)` });
+    }
+    kf.push({ opacity: 0, transform: `rotate(${sg * 10}deg)` });
+    w.animate(kf, { duration: dur, easing: "ease-in-out" });
+  });
+  // 鳴き声の「おんぷ」が上にふわっと出る
+  for (let i = 0; i < 4; i++) {
+    const n = document.createElement("div");
+    n.className = "note-fx";
+    n.textContent = ["🎵", "🎶"][i % 2];
+    n.style.left = (30 + Math.random() * 40) + "%";
+    stage.appendChild(n);
+    const a = n.animate([
+      { opacity: 0, transform: "translate(0,0) scale(.6)" },
+      { opacity: 1, transform: `translate(${(i % 2 ? 1 : -1) * 10}vmin,-14vmin) scale(1)`, offset: .3 },
+      { opacity: 0, transform: `translate(${(i % 2 ? 1 : -1) * 16}vmin,-30vmin) scale(1.1)` },
+    ], { duration: dur * 0.9, delay: i * dur * 0.12, easing: "ease-out", fill: "backwards" });
+    a.onfinish = () => n.remove();
+  }
+}
+let animalBusyUntil = 0;     // 鳴き終わるまで次のタップを受け付けない（performance.now() 基準）
 function triggerAnimalAnim(kind) {
   animalAnim.active = true;
   animalAnim.kind = kind;
@@ -1991,9 +2251,11 @@ function setupAnimalTap() {
     const cv = document.getElementById("animal-canvas");
     const r = cv.getBoundingClientRect();
     if (isEmoji) {
-      // 弾む（bounce）+ つぶれる（squash）を交互
-      triggerAnimalAnim(animalTapCount % 2 === 0 ? "bounce" : "squash");
-      SoundKit.playAnimal(animalIndex);
+      // 鳴き声の長さだけ動く。その間は次のタップを受け付けない
+      const ms = SoundKit.playAnimal(animalIndex);
+      const dur = ms > 0 ? ms : 600;
+      animalBusyUntil = performance.now() + dur;
+      playAnimalMotion(animalIndex, dur);
       spawnParticles(x - r.left, y - r.top,
         ["#ffd166","#ef476f","#06d6a0","#118ab2","#fff"][animalIndex % 5],
         30);
@@ -2001,7 +2263,7 @@ function setupAnimalTap() {
       if (animalTapCount >= 3) {
         animalTapCount = 0;
         animalIndex = (animalIndex + 1) % SoundKit.animals.length;
-        setTimeout(renderAnimal, 120);
+        setTimeout(renderAnimal, dur + 150);   // 鳴き終わってから次の動物へ
       }
     } else {
       // 背景タップ → 効果音だけ鳴らして次の動物へ
@@ -2021,6 +2283,7 @@ function setupAnimalTap() {
     e.preventDefault();
     // 手のひら相当の接触は無視（複数本指のタップや通常のタップはそのまま）
     if (isPalmTouch(e)) return;
+    if (performance.now() < animalBusyUntil) return;   // 鳴いている間は待つ（連打で鳴き声が重ならない）
     const {x, y} = getXY(e);
     const r = elEmo.getBoundingClientRect();
     const inside = x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
@@ -2483,90 +2746,139 @@ function pickRandomVehicleKind() {
   return Math.floor(Math.random() * SoundKit.vehicles.length);
 }
 
+// 乗り物の状態: x=中心の横位置(px) / y=待機位置からの縦のずれ(px)。vx,vy=慣性の速さ(px/秒)
+const VEHICLE_FRICTION = 1.7;      // 大きいほど早く止まる（1/秒）
+const VEHICLE_FLING_MAX = 2600;    // 投げた速さの上限(px/秒)
+const VEHICLE_SPEED_FULL = 1500;   // この速さで音が最大(px/秒)
+let vehicleZ = 10;
+let vehicleLastTick = 0;
+
+function vehicleBounds(v) {
+  const W = window.innerWidth, H = window.innerHeight;
+  const half = v.size * 0.55;
+  return {
+    xMin: half, xMax: W - half,
+    yMin: H * 0.34 - v.homeTop,                  // 空にははみ出さない（地面の上だけ）
+    yMax: H - v.size - 10 - v.homeTop,
+  };
+}
+function vehicleRender(v) {
+  const W = window.innerWidth;
+  v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), ${v.y}px) scaleX(${v.dir})`;
+}
+function vehicleStopLoop(v) {
+  if (v.loop) { v.loop.stop(); v.loop = null; }
+}
+// 直近 100ms の指の動きから速さ(px/秒)を求める。止まって見えるときは 0
+function vehicleDragVelocity(v, now) {
+  const h = v.hist;
+  while (h.length && now - h[0].t > 100) h.shift();
+  if (h.length < 2) return { vx: 0, vy: 0 };
+  const f = h[0], l = h[h.length - 1];
+  const dt = (l.t - f.t) / 1000;
+  if (dt <= 0 || now - l.t > 100) return { vx: 0, vy: 0 };
+  return { vx: (l.x - f.x) / dt, vy: (l.y - f.y) / dt };
+}
+
+function attachVehicleHandlers(v) {
+  const el = v.el;
+  el.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    if (isPalmTouch(e) || v.held) return;
+    try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
+    try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
+    try { el.setPointerCapture(e.pointerId); } catch (_) { /* 取得失敗は無視 */ }
+    v.held = true;
+    v.pid = e.pointerId;
+    v.vx = v.vy = 0;
+    v.gx = e.clientX - v.x;
+    v.gy = e.clientY - v.y;
+    v.hist = [{ t: performance.now(), x: v.x, y: v.y }];
+    el.style.zIndex = String(++vehicleZ);        // つかんだ乗り物を手前に
+    vehicleStopLoop(v);
+    try { v.loop = SoundKit.createVehicleLoop(v.kind); } catch (err) { console.warn("[audio] vehicle loop failed:", err); }
+    // つかんだ瞬間のクラクション（サイレンの車はサイレンが走行音なので鳴らさない）
+    if (v.kind !== 3 && v.kind !== 4) SoundKit.playVehicleSound(v.kind);
+  });
+  el.addEventListener("pointermove", e => {
+    if (!v.held || e.pointerId !== v.pid) return;
+    e.preventDefault();
+    const bd = vehicleBounds(v);
+    v.x = Math.max(bd.xMin, Math.min(bd.xMax, e.clientX - v.gx));
+    v.y = Math.max(bd.yMin, Math.min(bd.yMax, e.clientY - v.gy));
+    v.hist.push({ t: performance.now(), x: v.x, y: v.y });
+    vehicleRender(v);
+  });
+  function release(e) {
+    if (!v.held || e.pointerId !== v.pid) return;
+    v.held = false;
+    const fv = vehicleDragVelocity(v, performance.now());
+    const sp = Math.hypot(fv.vx, fv.vy);
+    const k = sp > VEHICLE_FLING_MAX ? VEHICLE_FLING_MAX / sp : 1;
+    v.vx = fv.vx * k; v.vy = fv.vy * k;
+    if (Math.hypot(v.vx, v.vy) < 15) { v.vx = v.vy = 0; vehicleStopLoop(v); }
+  }
+  el.addEventListener("pointerup", e => { e.preventDefault(); release(e); });
+  el.addEventListener("pointercancel", release);
+  el.addEventListener("lostpointercapture", release);
+}
+
 function buildVehicles() {
   const host = document.getElementById("vehicle-area");
   if (!host) return;
+  runningVehicles.forEach(vehicleStopLoop);
   host.innerHTML = "";
   runningVehicles.length = 0;
   const W0 = window.innerWidth;
   for (let i = 0; i < VEHICLE_COUNT; i++) {
     const el = document.createElement("div");
     el.className = "vehicle";
-    const kind = pickRandomVehicleKind();
+    // 3 台が別々の種類になるように選ぶ
+    let kind = pickRandomVehicleKind();
+    while (runningVehicles.some(o => o.kind === kind)) kind = pickRandomVehicleKind();
     el.textContent = SoundKit.vehicles[kind].emo;
     host.appendChild(el);
-    runningVehicles.push({
+    const v = {
       el, kind,
-      runState: "idle",          // "idle" | "running" | "returning"
-      t0: 0, dur: 1.2,
-      dir: 1,                     // +1: 右へ、-1: 左へ
-      fromX: 0, toX: 0,
-      // 待機位置（左・中央・右）。layoutVehicles() で詳細を最終決定
-      slotX: W0 * (i === 0 ? 0.25 : i === 1 ? 0.5 : 0.75),
-      slotI: i,
-      x:      W0 * (i === 0 ? 0.25 : i === 1 ? 0.5 : 0.75),
-    });
+      x: W0 * (i === 0 ? 0.25 : i === 1 ? 0.5 : 0.75), y: 0,
+      vx: 0, vy: 0, dir: 1,
+      held: false, pid: -1, gx: 0, gy: 0, hist: [], loop: null,
+      slotX: 0, slotY: 0, homeTop: 0, size: 100, moved: false,
+    };
+    runningVehicles.push(v);
+    attachVehicleHandlers(v);
   }
   layoutVehicles();
 }
 
-// 3 台を「画面内に完全に収まる」配置に並べる。
-// 利用可能領域は上 H*0.38 〜 下 H*0.97（⏱/🏠 と重ならず、画面外にも出ない）。
-// 1 台の高さ h = min(22vmin 相当, (領域高さ / 段数) * 0.98) で再計算し、
-// font-size を各段に合わせる。横向きでは 3 台を左・中央・右に横並びでも OK。
-// 全台で 0 <= top, bottom <= innerHeight が成立するよう、top を cellCenter - h/2 で配置。
+// 3 台の待機位置（初期配置）を決める。横向き: 横一列 / 縦向き: 3 段。
+// 領域は上 H*0.38 〜 下 H*0.97（⏱/🏠 と重ならず、画面外にも出ない）。
+// 一度でも動かした乗り物は、画面サイズが変わったときに範囲内へ収めるだけにする。
 function layoutVehicles() {
   const W = window.innerWidth;
   const H = window.innerHeight;
   const isLandscape = W >= H;
-  const slotCount = runningVehicles.length;
-
-  // 利用可能領域：上 H*0.38 〜 下 H*0.97
+  const n = runningVehicles.length;
   const regionTop = H * 0.38;
-  const regionBottom = H * 0.97;
-  const regionHeight = regionBottom - regionTop;
-
-  // font-size の基準値（22vmin = 短辺の 22%）
+  const regionHeight = H * 0.97 - regionTop;
   const baseFontSize = Math.min(W, H) * 0.22;
-
-  if (isLandscape) {
-    // 横向き：3 台を「左・中央・右」に横 1 列で配置（同じ高さ）
-    // 1 行の上限 = regionHeight * 0.92（行内に上下 4% ずつの余白）
-    const cellSize = Math.min(baseFontSize, regionHeight * 0.92);
-    const centerY = regionTop + regionHeight / 2;
-    const slotXs = [W * 0.25, W * 0.5, W * 0.75];
-    for (let i = 0; i < slotCount; i++) {
-      const v = runningVehicles[i];
-      v.slotX = slotXs[i];
-      const topY = centerY - cellSize / 2;
-      v.el.style.top = topY + "px";
-      v.el.style.fontSize = cellSize + "px";
-      if (v.runState === "idle") {
-        v.x = v.slotX;
-        // 向きを保持して pop を防ぐ（buildVehicles で dir=1 に初期化済み）
-        v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(${v.dir})`;
-      }
-      // running/returning 中の v.x は tick が補間中で触らない（戻り先の slotX だけ更新）
-    }
-  } else {
-    // 縦向き：3 台を 3 段に縦並び（中央に配置）
-    // 各段 = regionHeight / slotCount、その 0.97 倍を font-size 上限に
-    const slotHeight = regionHeight / slotCount;
-    const cellSize = Math.min(baseFontSize, slotHeight * 0.97);
-    for (let i = 0; i < slotCount; i++) {
-      const v = runningVehicles[i];
-      v.slotX = W * 0.5;
-      const cellCenterY = regionTop + slotHeight * (i + 0.5);
-      const topY = cellCenterY - cellSize / 2;
-      v.el.style.top = topY + "px";
-      v.el.style.fontSize = cellSize + "px";
-      if (v.runState === "idle") {
-        v.x = v.slotX;
-        // 向きを保持して pop を防ぐ（buildVehicles で dir=1 に初期化済み）
-        v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(${v.dir})`;
-      }
-      // running/returning 中の v.x は tick が補間中で触らない（戻り先の slotX だけ更新）
-    }
+  const cellSize = isLandscape
+    ? Math.min(baseFontSize, regionHeight * 0.92)
+    : Math.min(baseFontSize, (regionHeight / n) * 0.97);
+  for (let i = 0; i < n; i++) {
+    const v = runningVehicles[i];
+    v.size = cellSize;
+    v.homeTop = isLandscape
+      ? regionTop + regionHeight / 2 - cellSize / 2
+      : regionTop + (regionHeight / n) * (i + 0.5) - cellSize / 2;
+    v.slotX = isLandscape ? W * [0.25, 0.5, 0.75][i] : W * 0.5;
+    v.el.style.top = v.homeTop + "px";
+    v.el.style.fontSize = cellSize + "px";
+    if (!v.moved && !v.held) { v.x = v.slotX; v.y = 0; }
+    const bd = vehicleBounds(v);
+    v.x = Math.max(bd.xMin, Math.min(bd.xMax, v.x));
+    v.y = Math.max(bd.yMin, Math.min(bd.yMax, v.y));
+    vehicleRender(v);
   }
 }
 
@@ -2594,63 +2906,35 @@ function buildClouds() {
   }
 }
 
-function startVehicleRun(v) {
-  const W = window.innerWidth;
-  // 画面外への距離で左右どちらへ走るか決める
-  const distRight = W - v.x;
-  const distLeft  = v.x;
-  const goRight = distRight >= distLeft;
-  v.dir = goRight ? 1 : -1;
-  v.t0 = performance.now();
-  v.dur = 1.0 + Math.random() * 0.4;
-  v.runState = "running";
-  v.fromX = v.x;
-  v.toX = goRight ? (W + W * 0.2) : (-W * 0.2);
-  // 絵文字反転（左向きへ走るときは左右反転）
-  v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(${v.dir})`;
-}
-
+// 毎フレーム: 離した乗り物の慣性移動と、走行音の追従
 function tickVehicleRuns(now) {
-  const W = window.innerWidth;
-  for (let i = 0; i < runningVehicles.length; i++) {
-    const v = runningVehicles[i];
-    if (v.runState === "running") {
-      const t = (now - v.t0) / 1000;
-      const u = Math.min(1, t / v.dur);
-      // ease-in-out
-      const e = u < 0.5 ? 2*u*u : 1 - Math.pow(-2*u + 2, 2) / 2;
-      v.x = v.fromX + (v.toX - v.fromX) * e;
-      v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(${v.dir})`;
-      if (u >= 1) {
-        // 反対側から「待機位置」へ戻るアニメーション。
-        // この瞬間は画面外（dir>0 なら右端+W*0.2、dir<0 なら -W*0.2）にいるので、
-        // ここで別の絵文字へ入れ替えれば見た目には切り替わらない。
-        v.runState = "returning";
-        v.t0 = now;
-        v.dur = 1.6 + Math.random() * 0.6;
-        if (v.dir > 0) {
-          v.fromX = -W * 0.2;
-          v.toX   = v.slotX;
-        } else {
-          v.fromX = W + W * 0.2;
-          v.toX   = v.slotX;
-        }
-        // 画面外で見えないうちに絵文字だけ入れ替える（idle 時の pop を防ぐ）
-        v.kind = pickRandomVehicleKind();
-        v.el.textContent = SoundKit.vehicles[v.kind].emo;
-      }
-    } else if (v.runState === "returning") {
-      const t = (now - v.t0) / 1000;
-      const u = Math.min(1, t / v.dur);
-      const e = u < 0.5 ? 2*u*u : 1 - Math.pow(-2*u + 2, 2) / 2;
-      v.x = v.fromX + (v.toX - v.fromX) * e;
-      v.el.style.transform = `translate(calc(-50% + ${v.x - W*0.5}px), 0) scaleX(${v.dir})`;
-      if (u >= 1) {
-        // 絵文字の入れ替えは上記の running→returning 境界で行ったので、ここでは触らない。
-        // scaleX も v.dir のままにして、idle 確定時に向きが反転する pop を防ぐ。
-        v.runState = "idle";
-      }
+  const dt = Math.min(0.05, vehicleLastTick ? (now - vehicleLastTick) / 1000 : 0.016);
+  vehicleLastTick = now;
+  for (const v of runningVehicles) {
+    let sp = 0;
+    if (v.held) {
+      const fv = vehicleDragVelocity(v, now);
+      sp = Math.hypot(fv.vx, fv.vy);
+      if (Math.abs(fv.vx) > 30) v.dir = fv.vx > 0 ? 1 : -1;
+      if (sp > 0) v.moved = true;
+    } else if (v.vx !== 0 || v.vy !== 0) {
+      v.moved = true;
+      const bd = vehicleBounds(v);
+      v.x += v.vx * dt;
+      v.y += v.vy * dt;
+      // 壁にぶつかったら、少し勢いを失ってはね返る
+      if (v.x < bd.xMin) { v.x = bd.xMin; v.vx = Math.abs(v.vx) * 0.6; }
+      if (v.x > bd.xMax) { v.x = bd.xMax; v.vx = -Math.abs(v.vx) * 0.6; }
+      if (v.y < bd.yMin) { v.y = bd.yMin; v.vy = Math.abs(v.vy) * 0.6; }
+      if (v.y > bd.yMax) { v.y = bd.yMax; v.vy = -Math.abs(v.vy) * 0.6; }
+      const f = Math.exp(-VEHICLE_FRICTION * dt);
+      v.vx *= f; v.vy *= f;
+      sp = Math.hypot(v.vx, v.vy);
+      if (Math.abs(v.vx) > 30) v.dir = v.vx > 0 ? 1 : -1;
+      if (sp < 15) { v.vx = v.vy = 0; sp = 0; vehicleStopLoop(v); }
+      vehicleRender(v);
     }
+    if (v.loop) v.loop.update(Math.min(1, sp / VEHICLE_SPEED_FULL));
   }
 }
 
@@ -2659,6 +2943,7 @@ function loopVehicles() {
     // モード離脱時: rAF を null に戻し、ホーム→再入場時に loopVehicles() を再起動させる
     if (currentMode !== "vehicle") {
       vehicleRunRaf = null;
+      runningVehicles.forEach(vehicleStopLoop);
       return;
     }
     tickVehicleRuns(now);
@@ -2682,35 +2967,8 @@ function initVehicle() {
 function setupVehicleTap() {
   const host = document.getElementById("vehicle-area");
   if (!host) return;
-  buildVehicles();
+  buildVehicles();          // ドラッグの処理は各乗り物に付く（attachVehicleHandlers）
   bindResize(layoutVehicles);
-
-  function onDown(e) {
-    e.preventDefault();
-    if (isPalmTouch(e)) return;
-    // 音/全画面の準備で例外が出ても、絵・音のメイン処理は必ず走るよう try/catch で囲う
-    try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
-    try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
-    // タップされた DOM が vehicle か判定（祖先方向にたどる）
-    let node = e.target;
-    while (node && node !== host) {
-      if (node.classList && node.classList.contains("vehicle")) {
-        const idx = runningVehicles.findIndex(v => v.el === node);
-        if (idx >= 0) {
-          const v = runningVehicles[idx];
-          // 走行中でも走行中でも、音は鳴らして走行はリスタート
-          SoundKit.playVehicleSound(v.kind);
-          startVehicleRun(v);
-        }
-        return;
-      }
-      node = node.parentNode;
-    }
-    // どの vehicle でもない場所をタップ:
-    // #vehicle-area は pointer-events:none なのでここに到達することはない (死に分岐)。
-    // 以前はここで SoundKit.playTwinkle() を呼んでいたが、常に未達だったので削除した。
-  }
-  host.addEventListener("pointerdown", onDown, {passive:false});
   host.addEventListener("click", e => e.preventDefault());
 }
 
@@ -2932,6 +3190,236 @@ function setupDrawTap() {
 }
 
 /* =====================================================================
+   モード：いないいないばあ
+   - 大きな箱が4つ。タップすると箱が開いて動物が「ばあ！」と出てきて鳴く。
+   - しばらくすると自動で閉じ、次は別の動物が隠れる。
+   ===================================================================== */
+const PEEK_COLORS = ["#ff8fab", "#74c0fc", "#ffd43b", "#8ce99a"];
+const PEEK_OPEN_MS = 2600;                  // 開いたままの時間
+const peekBoxes = [];
+
+function pickPeekAnimal(exceptIdx) {
+  const n = SoundKit.animals.length;
+  let i = Math.floor(Math.random() * n);
+  if (i === exceptIdx) i = (i + 1) % n;
+  return i;
+}
+function initPeek() {
+  peekBoxes.length = 0;
+  for (let i = 0; i < 4; i++) {
+    peekBoxes.push({
+      color: PEEK_COLORS[i],
+      animal: pickPeekAnimal(-1),
+      open: false,
+      t0: 0,            // 開いた時刻（弾むアニメ用）
+      x: 0, y: 0, s: 0, // 毎フレーム layoutPeek で更新
+    });
+  }
+  const cv = document.getElementById("peek-canvas");
+  const onResize = setupModeCanvas(cv);
+  bindResize(onResize);
+  loopPeek(cv);
+}
+function layoutPeek(w, h) {
+  // 2x2 を画面中央に。🏠 と重ならないよう上に余白を取る
+  const top = Math.max(110, h * 0.12);
+  const availH = h - top - 30;
+  const s = Math.min(w / 2.3, availH / 2.15);
+  const gap = s * 0.12;
+  const x0 = w / 2 - s - gap / 2;
+  const y0 = top + (availH - (2 * s + gap)) / 2;
+  peekBoxes.forEach((b, i) => {
+    b.s = s;
+    b.x = x0 + (i % 2) * (s + gap);
+    b.y = y0 + Math.floor(i / 2) * (s + gap);
+  });
+}
+function roundRectPath(ctx2d, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2));   // 画面サイズ0の瞬間に負になるのを防ぐ
+  ctx2d.beginPath();
+  ctx2d.moveTo(x + r, y);
+  ctx2d.arcTo(x + w, y, x + w, y + h, r);
+  ctx2d.arcTo(x + w, y + h, x, y + h, r);
+  ctx2d.arcTo(x, y + h, x, y, r);
+  ctx2d.arcTo(x, y, x + w, y, r);
+  ctx2d.closePath();
+}
+function loopPeek(cv) {
+  const ctx2d = cv.getContext("2d");
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    layoutPeek(w, h);
+    ctx2d.clearRect(0, 0, w, h);
+    ctx2d.textAlign = "center";
+    ctx2d.textBaseline = "middle";
+    for (const b of peekBoxes) {
+      // 開いて時間が経ったら閉じて、次の動物を隠す
+      if (b.open && now - b.t0 > PEEK_OPEN_MS) {
+        b.open = false;
+        b.animal = pickPeekAnimal(b.animal);
+      }
+      // 箱の影 + 本体（開いているときは薄く＝ふたが外れた）
+      ctx2d.fillStyle = "rgba(0,0,0,.10)";
+      roundRectPath(ctx2d, b.x, b.y + b.s * 0.04, b.s, b.s, b.s * 0.14);
+      ctx2d.fill();
+      ctx2d.fillStyle = b.open ? "rgba(255,255,255,.55)" : b.color;
+      roundRectPath(ctx2d, b.x, b.y, b.s, b.s, b.s * 0.14);
+      ctx2d.fill();
+      const cx = b.x + b.s / 2, cy = b.y + b.s / 2;
+      if (b.open) {
+        // 「ばあ！」：ぽんと大きくなって落ち着く
+        const t = (now - b.t0) / 1000;
+        const sc = 1 + 0.35 * Math.exp(-t * 6) * Math.cos(t * 18);
+        ctx2d.font = `${Math.floor(b.s * 0.62 * sc)}px serif`;
+        ctx2d.fillStyle = "#000";
+        ctx2d.fillText(SoundKit.animals[b.animal].emo, cx, cy);
+      } else {
+        // 閉じている箱：ふたの目印（はてな）
+        ctx2d.font = `${Math.floor(b.s * 0.5)}px serif`;
+        ctx2d.fillStyle = "#000";
+        ctx2d.fillText("🎁", cx, cy);
+      }
+    }
+    updateParticles(dt);
+    drawParticles(ctx2d);
+    if (currentMode === "peek") requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+function setupPeekTap() {
+  const cv = document.getElementById("peek-canvas");
+  function onDown(e) {
+    e.preventDefault();
+    if (isPalmTouch(e)) return;
+    try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
+    try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
+    const r = cv.getBoundingClientRect();
+    const lx = e.clientX - r.left, ly = e.clientY - r.top;
+    const hit = peekBoxes.find(b => lx >= b.x && lx <= b.x + b.s && ly >= b.y && ly <= b.y + b.s);
+    if (!hit) { SoundKit.playTwinkle(); return; }
+    hit.open = true;
+    hit.t0 = performance.now();
+    SoundKit.playAnimal(hit.animal);
+    spawnParticles(hit.x + hit.s / 2, hit.y + hit.s / 2, hit.color, 30);
+  }
+  cv.addEventListener("pointerdown", onDown, {passive:false});
+  cv.addEventListener("click", e => e.preventDefault());
+}
+
+/* =====================================================================
+   モード：つみき
+   - タップした場所に積み木が落ちて積み上がる。落ちるたびにドレミの音。
+   - 高く積めたらお祝い（きらきら + 音）して、積み木が消えて最初から。
+   ===================================================================== */
+const BLOCK_COLORS = ["#ff6b6b", "#4dabf7", "#ffd43b", "#51cf66", "#cc5de8", "#ff922b"];
+const blocks = [];                           // {x,y,w,h,vy,color,landed,squash}
+let blocksClearing = 0;                      // 0=通常 / >0 = 片付けの残り秒
+
+function initBlocks() {
+  blocks.length = 0;
+  blocksClearing = 0;
+  const cv = document.getElementById("blocks-canvas");
+  const onResize = setupModeCanvas(cv);
+  bindResize(onResize);
+  loopBlocks(cv);
+}
+function blockSize(w, h) {
+  const base = Math.min(w, h);
+  return { bw: base * 0.2, bh: base * 0.11 };
+}
+function dropBlock(lx, w, h) {
+  if (blocksClearing > 0) return;
+  if (blocks.filter(b => !b.landed).length >= 4) return;   // 連打しても空中は4個まで
+  const { bw, bh } = blockSize(w, h);
+  const x = Math.max(bw / 2, Math.min(w - bw / 2, lx));
+  blocks.push({
+    x, y: -bh, w: bw, h: bh, vy: 0,
+    color: BLOCK_COLORS[Math.floor(Math.random() * BLOCK_COLORS.length)],
+    landed: false, squash: 0,
+  });
+}
+// 積み木 b の真下にある一番高い面（画面の座標。大きいほど下）
+function blockSupportY(b, h) {
+  let y = h - 24;                           // 地面
+  for (const o of blocks) {
+    if (o === b || !o.landed) continue;
+    if (Math.abs(o.x - b.x) < (o.w + b.w) / 2 - 2) y = Math.min(y, o.y - o.h / 2);
+  }
+  return y;
+}
+function loopBlocks(cv) {
+  const ctx2d = cv.getContext("2d");
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    // 落下と着地
+    for (const b of blocks) {
+      if (b.landed) { b.squash = Math.max(0, b.squash - dt * 4); continue; }
+      b.vy += 2200 * dt;
+      b.y += b.vy * dt;
+      const floor = blockSupportY(b, h);
+      if (b.y + b.h / 2 >= floor) {
+        b.y = floor - b.h / 2;
+        b.landed = true;
+        b.squash = 1;
+        try { SoundKit.playNote(SoundKit.noteForX(b.x / w), 0.4, 0.2); } catch (err) { /* ignore */ }
+        spawnParticles(b.x, b.y + b.h / 2, b.color, 10);
+        // 高く積めた（画面の上 1/4 に届いた）→ お祝い
+        if (blocksClearing === 0 && b.y - b.h / 2 < h * 0.25) {
+          blocksClearing = 1.6;
+          SoundKit.playTwinkle();
+          try { SoundKit.finishTone(); } catch (err) { /* ignore */ }
+          for (const o of blocks) spawnParticles(o.x, o.y, o.color, 8);
+        }
+      }
+    }
+    if (blocksClearing > 0) {
+      blocksClearing -= dt;
+      if (blocksClearing <= 0) { blocks.length = 0; blocksClearing = 0; }
+    }
+    // 描画
+    ctx2d.clearRect(0, 0, w, h);
+    ctx2d.fillStyle = "rgba(0,0,0,.12)";
+    ctx2d.fillRect(0, h - 24, w, 24);
+    const fade = blocksClearing > 0 ? Math.max(0, blocksClearing / 1.6) : 1;
+    for (const b of blocks) {
+      const sq = 1 + 0.12 * Math.sin(Math.PI * b.squash);   // 着地でぷにっと
+      const bw = b.w * (2 - sq), bh = b.h * sq;
+      ctx2d.globalAlpha = fade;
+      ctx2d.fillStyle = b.color;
+      roundRectPath(ctx2d, b.x - bw / 2, b.y + b.h / 2 - bh, bw, bh, bh * 0.2);
+      ctx2d.fill();
+      ctx2d.fillStyle = "rgba(255,255,255,.35)";
+      roundRectPath(ctx2d, b.x - bw / 2 + bw * 0.06, b.y + b.h / 2 - bh + bh * 0.1, bw * 0.88, bh * 0.25, bh * 0.1);
+      ctx2d.fill();
+    }
+    ctx2d.globalAlpha = 1;
+    updateParticles(dt);
+    drawParticles(ctx2d);
+    if (currentMode === "blocks") requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+function setupBlocksTap() {
+  const cv = document.getElementById("blocks-canvas");
+  function onDown(e) {
+    e.preventDefault();
+    if (isPalmTouch(e)) return;
+    try { SoundKit.unlock(); } catch (err) { console.warn("[audio] unlock failed:", err); }
+    try { tryFullscreen(); } catch (err) { console.warn("[fullscreen] failed:", err); }
+    const r = cv.getBoundingClientRect();
+    dropBlock(e.clientX - r.left, cv.clientWidth, cv.clientHeight);
+  }
+  cv.addEventListener("pointerdown", onDown, {passive:false});
+  cv.addEventListener("click", e => e.preventDefault());
+}
+
+/* =====================================================================
    ホーム：カードでモード切替
    ===================================================================== */
 function setupHomeCards() {
@@ -2944,7 +3432,7 @@ function setupHomeCards() {
       showMode(card.dataset.mode);
     });
     // 絵文字だけ表示（対象児が読める文字なし）
-    const map = { animal:"🐶", balloon:"🎈", color:"🎨", music:"🎹", vehicle:"🚗", draw:"🖍️" };
+    const map = { animal:"🐶", balloon:"🎈", color:"🎨", music:"🎹", vehicle:"🚗", draw:"🖍️", peek:"🙈", blocks:"🧱" };
     card.textContent = map[card.dataset.mode] || "•";
   });
 }
@@ -2976,6 +3464,8 @@ function start() {
   setupMusicTap();
   setupVehicleTap();
   setupDrawTap();
+  setupPeekTap();
+  setupBlocksTap();
   setupFinishStage();
   // タブが裏に行ったときは時間計測を止める
   document.addEventListener("visibilitychange", () => {
